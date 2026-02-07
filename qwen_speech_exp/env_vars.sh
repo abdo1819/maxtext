@@ -9,10 +9,8 @@ export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH}"
 # --- 2. MODEL CONFIGURATION ---
 export MODEL_NAME="qwen3-omni-30b-a3b"
 export BASE_OUTPUT_DIR="gs://arabic-asr-dataset/checkpoints"
-# The specific path for this model's checkpoint (fp32 original)
-export CHECKPOINT_PATH_FP32="${BASE_OUTPUT_DIR}/${MODEL_NAME}-thinking"
-# BF16 checkpoint path (smaller, faster loading)
-export CHECKPOINT_PATH="${BASE_OUTPUT_DIR}/${MODEL_NAME}-thinking-bf16"
+# The specific path for this model's checkpoint
+export CHECKPOINT_PATH="${BASE_OUTPUT_DIR}/${MODEL_NAME}-thinking"
 
 # --- 3. HUGGINGFACE CONFIG ---
 export HF_HOME='/mnt/data/hf_cache'

@@ -17,6 +17,8 @@ if gsutil ls "${CHECKPOINT_PATH}/0/items" &> /dev/null; then
 else
     echo "⚠️  Checkpoint not found. Starting conversion..."
     
+    # Note: Checkpoints are stored in fp32 regardless of weight_dtype setting.
+    # The weight_dtype only affects inference computation, not storage format.
     python "${MAXTEXT_PKG_DIR}/utils/ckpt_conversion/to_maxtext.py" \
         "${CONFIG_FILE}" \
         model_name="$MODEL_NAME" \
@@ -24,8 +26,7 @@ else
         hf_access_token="$HF_TOKEN" \
         hardware=cpu \
         skip_jax_distributed_system=True \
-        scan_layers=False \
-        weight_dtype=bfloat16 \
+        scan_layers=False
 
     echo "✅ Conversion completed successfully!"
 fi
