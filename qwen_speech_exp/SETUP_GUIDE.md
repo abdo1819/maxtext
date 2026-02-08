@@ -70,9 +70,10 @@ cd ~/maxtext
 bash qwen_speech_exp/setup_jumpbox.sh
 ```
 
-This script installs system packages (git, python3-venv, gcsfuse), creates a
-Python venv with tensorflow and array-record, sets up gcloud SSH keys for TPU
-access, and mounts `gs://arabic-asr-dataset` at `/tmp/gcsfuse`.
+This script installs system packages (git, python3-venv), adds Google's apt
+repo and installs gcsfuse, creates a Python venv with tensorflow and
+array-record, sets up gcloud SSH keys for TPU access, and mounts
+`gs://arabic-asr-dataset` at `/tmp/gcsfuse`.
 
 ---
 

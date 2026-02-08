@@ -24,7 +24,16 @@ set -e
 
 echo "=== 1/5 Installing system packages ==="
 sudo apt-get update
-sudo apt-get install -y git python3-pip python3-venv gcsfuse
+sudo apt-get install -y git python3-pip python3-venv
+
+# Install gcsfuse from Google's repo
+export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt ${GCSFUSE_REPO} main" \
+    | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    | sudo tee /usr/share/keyrings/cloud.google.asc > /dev/null
+sudo apt-get update
+sudo apt-get install -y gcsfuse
 
 echo "=== 2/5 Setting up Python venv ==="
 python3 -m venv ~/venv
