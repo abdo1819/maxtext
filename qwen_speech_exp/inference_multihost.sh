@@ -74,5 +74,6 @@ python3 -m maxtext.decode "${CONFIG_FILE}" \
     use_multimodal=${USE_MULTIMODAL} \
     use_audio=${USE_AUDIO} \
     prompt="${PROMPT}" \
+    skip_jax_distributed_system=false \
     autoregressive_decode_assert="" \
     ${EXTRA_ARGS}

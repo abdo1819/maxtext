@@ -125,7 +125,7 @@ The `setup_tpu_worker.sh` script installs Python 3.12 from deadsnakes PPA,
 creates a venv at `~/venv-maxtext`, installs PyTorch + XLA for TPU, then runs
 the standard MaxText `setup.sh`.
 
-**Save the `RUN_NAME`** printed in the output (e.g. `2026-02-08-19-30-00`).
+**Save the `RUN_NAME`** printed in the output (e.g. `2026-02-08-19-08-15`).
 All subsequent commands use `--USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>`
 to avoid re-copying the code.
 
@@ -141,7 +141,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse" \
+    --COMMAND="source ~/venv-maxtext/bin/activate && bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=<RUN_NAME>
 ```
@@ -156,7 +156,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="python3 -c 'import jax; print(f\"Host {jax.process_index()}: {jax.device_count()} devices\")'" \
+    --COMMAND="source ~/venv-maxtext/bin/activate && python3 -c 'import jax; print(f\"Host {jax.process_index()}: {jax.device_count()} devices\")'" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=<RUN_NAME>
 ```
@@ -175,7 +175,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd qwen_speech_exp && bash train.sh" \
+    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash train.sh" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=<RUN_NAME>
 ```
@@ -194,7 +194,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd qwen_speech_exp && bash inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
+    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=<RUN_NAME>
 ```
@@ -207,7 +207,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd qwen_speech_exp && bash inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
+    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=<RUN_NAME>
 ```
@@ -237,8 +237,8 @@ All commands run from the jumpbox inside `~/maxtext`.
 
 | Task | Command |
 |------|---------|
-| Setup TPU workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="bash tools/setup/setup.sh MODE=stable" --SCRIPT_DIR=$HOME/maxtext` |
-| Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>` |
+| Setup TPU workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="bash qwen_speech_exp/setup_tpu_worker.sh" --SCRIPT_DIR=$HOME/maxtext` |
+| Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="source ~/venv-maxtext/bin/activate && CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>` |
 | SSH into worker N | `gcloud compute tpus tpu-vm ssh qr-v4-32 --worker=N --project=arabic-asr-level2thinkg --zone=us-central2-b --internal-ip` |
 | Convert data | `bash qwen_speech_exp/convert_data.sh` |
 | Train | See Step 7 |
