@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # --- 1. PROJECT PATHS ---
-export PROJECT_ROOT="/home/abdo1819/maxtext"
+# Auto-detect project root relative to this script (works on both local and TPU workers)
+export PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MAXTEXT_PKG_DIR="${PROJECT_ROOT}/src/MaxText"
 # Add MaxText to python path so we can run modules
 export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH}"

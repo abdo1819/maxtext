@@ -19,6 +19,7 @@ import jax
 from jax.sharding import PartitionSpec as P
 
 from MaxText import pyconfig
+from MaxText.input_pipeline._audio_data_processing import make_grain_audio_train_iterator, make_grain_audio_eval_iterator
 from MaxText.input_pipeline._grain_data_processing import make_grain_train_iterator, make_grain_eval_iterator
 from MaxText.input_pipeline._hf_data_processing import make_hf_train_iterator, make_hf_eval_iterator
 from MaxText.input_pipeline._tfds_data_processing import make_tfds_train_iterator, make_tfds_eval_iterator
@@ -67,8 +68,13 @@ def create_data_iterator(config: pyconfig.HyperParameters, mesh):
       "c4_mlperf": (make_c4_mlperf_train_iterator, make_c4_mlperf_eval_iterator),
   }
 
+  # Use audio SFT pipeline when use_audio is enabled with grain
+  if config.use_audio and config.dataset_type == "grain":
+    max_logging.log("Using audio SFT grain pipeline for training.")
+    train_iterator = make_grain_audio_train_iterator
+    eval_iterator = make_grain_audio_eval_iterator
   # Collect train and eval iterators
-  if config.dataset_type in ["tfds", "grain", "hf", "c4_mlperf"]:
+  elif config.dataset_type in ["tfds", "grain", "hf", "c4_mlperf"]:
     if config.dataset_type == "c4_mlperf":
       assert config.packing, "c4_mlperf dataloader only works with packing. For padded version, use tfds dataloader"
     train_iterator, eval_iterator = dataset_type_to_train_eval_iterator[config.dataset_type]
