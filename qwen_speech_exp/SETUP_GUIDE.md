@@ -77,134 +77,95 @@ array-record, sets up gcloud SSH keys for TPU access, and mounts
 
 ---
 
-## Step 3: Mount GCS Data on Jumpbox
+## Step 3: Convert TFRecord to ArrayRecord (on Jumpbox)
 
-```bash
-# Create mount point
-sudo mkdir -p /tmp/gcsfuse
-
-# Mount the bucket
-gcsfuse --implicit-dirs arabic-asr-dataset /tmp/gcsfuse
-
-# Verify data is accessible
-ls /tmp/gcsfuse/grain_data/train/ | head -5
-```
-
----
-
-## Step 4: Convert TFRecord to ArrayRecord (on Jumpbox)
-
-Run the conversion directly on the jumpbox. This reads from GCS via gcsfuse
-and writes back to GCS via gcsfuse:
+Run the conversion directly on the jumpbox. This reads from GCS via gcsfuse,
+converts locally, then uploads to GCS via gsutil:
 
 ```bash
 cd ~/maxtext
 source ~/venv/bin/activate
 
-# Convert each split
-for SPLIT in train validation test; do
-    echo "=== Converting ${SPLIT} ==="
-    python3 qwen_speech_exp/convert_tfrecord_to_arrayrecord.py \
-        --input_dir /tmp/gcsfuse/grain_data/${SPLIT} \
-        --output_dir /tmp/gcsfuse/grain_data_arrayrecord/${SPLIT} \
-        --file_pattern "*.tfrecord"
-done
+bash qwen_speech_exp/convert_data.sh
 ```
+
+The script uploads each file incrementally and tracks progress in
+`/tmp/arrayrecord_output/upload_tracker.json`. If interrupted, re-run
+and it will resume from where it left off.
 
 Verify the output:
 
 ```bash
-ls /tmp/gcsfuse/grain_data_arrayrecord/train/ | head -5
-# or via gsutil:
 gsutil ls gs://arabic-asr-dataset/grain_data_arrayrecord/train/ | head -5
 ```
 
 ---
 
-## Step 5: Set Up TPU Workers (from Jumpbox)
+## Step 4: Set Up TPU Workers (from Jumpbox)
 
-Since the jumpbox is in the same project/zone, use `--internal-ip` for faster
-SSH. These commands are run **from the jumpbox**.
+This copies the code to all 4 TPU workers, installs Python 3.12, PyTorch XLA,
+and JAX + MaxText dependencies.
 
-### Option A: Using multihost_runner.py
+**Important:** Use `$HOME/maxtext` (not `~/maxtext`) for `--SCRIPT_DIR` since
+Python does not expand `~`.
 
 ```bash
 cd ~/maxtext
 
-# Install deps on all TPU workers (copies the repo + runs setup.sh)
 python3 tools/orchestration/multihost_runner.py \
     --TPU_PREFIX=qr-v4-32 \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="bash tools/setup/setup.sh MODE=stable" \
-    --SCRIPT_DIR=~/maxtext
+    --COMMAND="bash qwen_speech_exp/setup_tpu_worker.sh" \
+    --SCRIPT_DIR=$HOME/maxtext
 ```
 
-Save the `RUN_NAME` printed in the output (e.g. `2026-02-08-19-30-00`).
+The `setup_tpu_worker.sh` script installs Python 3.12 from deadsnakes PPA,
+creates a venv at `~/venv-maxtext`, installs PyTorch + XLA for TPU, then runs
+the standard MaxText `setup.sh`.
 
-### Option B: Using tpu_ssh.sh directly
-
-```bash
-cd ~/maxtext
-
-# Run setup on all 4 workers in parallel
-bash qwen_speech_exp/tpu_ssh.sh --all \
-    --command "cd ~/maxtext && bash tools/setup/setup.sh MODE=stable"
-```
-
-Note: For Option B you need to first copy the code to each worker. See
-Step 5b below.
-
-### Step 5b: Copy Code to TPU Workers (for tpu_ssh.sh approach)
-
-```bash
-# Tar the repo
-cd ~ && tar czf maxtext.tar.gz maxtext/
-
-# Copy to all workers
-for w in 0 1 2 3; do
-    gcloud compute tpus tpu-vm scp maxtext.tar.gz qr-v4-32:~/ \
-        --worker=$w \
-        --project=arabic-asr-level2thinkg \
-        --zone=us-central2-b \
-        --internal-ip &
-done
-wait
-
-# Untar on all workers
-bash qwen_speech_exp/tpu_ssh.sh --all \
-    --command "cd ~ && tar xzf maxtext.tar.gz"
-```
+**Save the `RUN_NAME`** printed in the output (e.g. `2026-02-08-19-30-00`).
+All subsequent commands use `--USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>`
+to avoid re-copying the code.
 
 ---
 
-## Step 6: Mount GCS on TPU Workers
+## Step 5: Mount GCS on TPU Workers
 
 Each TPU worker needs gcsfuse to access the dataset:
 
 ```bash
-bash qwen_speech_exp/tpu_ssh.sh --all \
-    --command "cd ~/maxtext && bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse"
+python3 tools/orchestration/multihost_runner.py \
+    --TPU_PREFIX=qr-v4-32 \
+    --PROJECT=arabic-asr-level2thinkg \
+    --ZONE=us-central2-b \
+    --INTERNAL_IP=true \
+    --COMMAND="bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse" \
+    --USE_EXISTING_FOLDER=true \
+    --RUN_NAME=<RUN_NAME>
 ```
 
 ---
 
-## Step 7: Verify TPU Setup
+## Step 6: Verify TPU Setup
 
 ```bash
-# Check JAX sees the TPU devices on each worker
-bash qwen_speech_exp/tpu_ssh.sh --all \
-    --command "cd ~/maxtext && source ~/venv/bin/activate 2>/dev/null; python3 -c 'import jax; print(f\"Host {jax.process_index()}: {jax.device_count()} devices\")'"
+python3 tools/orchestration/multihost_runner.py \
+    --TPU_PREFIX=qr-v4-32 \
+    --PROJECT=arabic-asr-level2thinkg \
+    --ZONE=us-central2-b \
+    --INTERNAL_IP=true \
+    --COMMAND="python3 -c 'import jax; print(f\"Host {jax.process_index()}: {jax.device_count()} devices\")'" \
+    --USE_EXISTING_FOLDER=true \
+    --RUN_NAME=<RUN_NAME>
 ```
 
 Expected: each worker reports 4 TPU v4 devices.
 
 ---
 
-## Step 8: Run Training (from Jumpbox)
-
-### Option A: multihost_runner.py
+## Step 7: Run Training (from Jumpbox)
 
 ```bash
 cd ~/maxtext
@@ -216,22 +177,14 @@ python3 tools/orchestration/multihost_runner.py \
     --INTERNAL_IP=true \
     --COMMAND="cd qwen_speech_exp && bash train.sh" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME_FROM_STEP5>
+    --RUN_NAME=<RUN_NAME>
 ```
 
-### Option B: tpu_ssh.sh
-
-```bash
-bash qwen_speech_exp/tpu_ssh.sh --all \
-    --command "cd ~/maxtext/qwen_speech_exp && bash train.sh"
-```
-
-Monitor logs: multihost_runner stores logs at `/tmp/<RUN_NAME>/output_slice_*.txt`
-on the jumpbox.
+Monitor logs on the jumpbox at `/tmp/<RUN_NAME>/output_slice_*.txt`.
 
 ---
 
-## Step 9: Run Inference (from Jumpbox)
+## Step 8: Run Inference (from Jumpbox)
 
 ### Text mode
 
@@ -249,7 +202,6 @@ python3 tools/orchestration/multihost_runner.py \
 ### Audio mode
 
 ```bash
-# First copy audio file to all workers (or use a GCS path)
 python3 tools/orchestration/multihost_runner.py \
     --TPU_PREFIX=qr-v4-32 \
     --PROJECT=arabic-asr-level2thinkg \
@@ -262,7 +214,7 @@ python3 tools/orchestration/multihost_runner.py \
 
 ---
 
-## Step 10: Cleanup
+## Step 9: Cleanup
 
 ```bash
 # Delete the jumpbox when done
@@ -279,18 +231,19 @@ gcloud alpha compute tpus queued-resources delete qr-v4-32 \
 
 ---
 
-## Quick Reference: Commands from Jumpbox
+## Quick Reference
+
+All commands run from the jumpbox inside `~/maxtext`.
 
 | Task | Command |
 |------|---------|
-| SSH into worker 0 | `bash qwen_speech_exp/tpu_ssh.sh` |
-| SSH into worker N | `bash qwen_speech_exp/tpu_ssh.sh --worker N` |
-| Run cmd on 1 worker | `bash qwen_speech_exp/tpu_ssh.sh --command "CMD"` |
-| Run cmd on ALL workers | `bash qwen_speech_exp/tpu_ssh.sh --all --command "CMD"` |
-| Copy file to worker | `bash qwen_speech_exp/tpu_ssh.sh --scp local remote` |
-| Convert data | `python3 qwen_speech_exp/convert_tfrecord_to_arrayrecord.py ...` |
-| Train (multihost) | `python3 tools/orchestration/multihost_runner.py --INTERNAL_IP=true ...` |
-| Check TPU devices | `bash qwen_speech_exp/tpu_ssh.sh --command "python3 -c 'import jax; print(jax.devices())'"` |
+| Setup TPU workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="bash tools/setup/setup.sh MODE=stable" --SCRIPT_DIR=$HOME/maxtext` |
+| Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>` |
+| SSH into worker N | `gcloud compute tpus tpu-vm ssh qr-v4-32 --worker=N --project=arabic-asr-level2thinkg --zone=us-central2-b --internal-ip` |
+| Convert data | `bash qwen_speech_exp/convert_data.sh` |
+| Train | See Step 7 |
+| Inference | See Step 8 |
+| Check TPU devices | See Step 6 |
 
 ---
 
@@ -300,11 +253,12 @@ gcloud alpha compute tpus queued-resources delete qr-v4-32 \
 qwen_speech_exp/
 ├── SETUP_GUIDE.md                      # This file
 ├── env_vars.sh                         # Environment variables (paths, model name)
+├── setup_jumpbox.sh                    # Jumpbox bootstrap script
 ├── convert.sh                          # HF -> MaxText checkpoint conversion
 ├── convert_data.sh                     # TFRecord -> ArrayRecord data conversion
 ├── convert_tfrecord_to_arrayrecord.py  # Python converter script
+├── setup_tpu_worker.sh                 # TPU worker setup (Python 3.12 + deps)
 ├── train.sh                            # Training launch script (v4-32, 16 chips)
 ├── inference.sh                        # Single-host inference (4 chips)
-├── inference_multihost.sh              # Multi-host inference (16 chips)
-└── tpu_ssh.sh                          # Helper to SSH/SCP to TPU workers
+└── inference_multihost.sh              # Multi-host inference (16 chips)
 ```
