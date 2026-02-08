@@ -101,13 +101,10 @@ gsutil ls gs://arabic-asr-dataset/grain_data_arrayrecord/train/ | head -5
 
 ---
 
-## Step 4: Set Up TPU Workers (from Jumpbox)
+## Step 4: Clone Code on TPU Workers (from Jumpbox)
 
-This copies the code to all 4 TPU workers, installs Python 3.12, PyTorch XLA,
-and JAX + MaxText dependencies.
-
-**Important:** Use `$HOME/maxtext` (not `~/maxtext`) for `--SCRIPT_DIR` since
-Python does not expand `~`.
+Clone the repo on all 4 TPU workers so they can pull updates via `git pull`
+instead of re-copying the entire repo each time.
 
 ```bash
 cd ~/maxtext
@@ -117,21 +114,49 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="bash qwen_speech_exp/setup_tpu_worker.sh" \
+    --COMMAND="git clone https://github.com/abdo1819/maxtext.git ~/maxtext || (cd ~/maxtext && git pull)" \
     --SCRIPT_DIR=$HOME/maxtext
+```
+
+**Save the `RUN_NAME`** printed in the output (e.g. `2026-02-08-19-43-48`).
+
+---
+
+## Step 5: Install Dependencies on TPU Workers
+
+```bash
+python3 tools/orchestration/multihost_runner.py \
+    --TPU_PREFIX=qr-v4-32 \
+    --PROJECT=arabic-asr-level2thinkg \
+    --ZONE=us-central2-b \
+    --INTERNAL_IP=true \
+    --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup_tpu_worker.sh" \
+    --USE_EXISTING_FOLDER=true \
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
 The `setup_tpu_worker.sh` script installs Python 3.12 from deadsnakes PPA,
 creates a venv at `~/venv-maxtext`, installs PyTorch + XLA for TPU, then runs
 the standard MaxText `setup.sh`.
 
-**Save the `RUN_NAME`** printed in the output (e.g. `2026-02-08-19-08-15`).
-All subsequent commands use `--USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>`
-to avoid re-copying the code.
+### Syncing code changes
+
+After pushing changes to git, pull on all workers:
+
+```bash
+python3 tools/orchestration/multihost_runner.py \
+    --TPU_PREFIX=qr-v4-32 \
+    --PROJECT=arabic-asr-level2thinkg \
+    --ZONE=us-central2-b \
+    --INTERNAL_IP=true \
+    --COMMAND="cd ~/maxtext && git pull" \
+    --USE_EXISTING_FOLDER=true \
+    --RUN_NAME=2026-02-08-19-43-48
+```
 
 ---
 
-## Step 5: Mount GCS on TPU Workers
+## Step 6: Mount GCS on TPU Workers
 
 Each TPU worker needs gcsfuse to access the dataset:
 
@@ -141,14 +166,14 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="source ~/venv-maxtext/bin/activate && bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME>
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
 ---
 
-## Step 6: Verify TPU Setup
+## Step 7: Verify TPU Setup
 
 ```bash
 python3 tools/orchestration/multihost_runner.py \
@@ -158,14 +183,14 @@ python3 tools/orchestration/multihost_runner.py \
     --INTERNAL_IP=true \
     --COMMAND="source ~/venv-maxtext/bin/activate && python3 -c 'import jax; print(f\"Host {jax.process_index()}: {jax.device_count()} devices\")'" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME>
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
 Expected: each worker reports 4 TPU v4 devices.
 
 ---
 
-## Step 7: Run Training (from Jumpbox)
+## Step 8: Run Training (from Jumpbox)
 
 ```bash
 cd ~/maxtext
@@ -175,16 +200,16 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash train.sh" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/train.sh" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME>
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
-Monitor logs on the jumpbox at `/tmp/<RUN_NAME>/output_slice_*.txt`.
+Monitor logs on the jumpbox at `/tmp/2026-02-08-19-43-48/output_slice_*.txt`.
 
 ---
 
-## Step 8: Run Inference (from Jumpbox)
+## Step 9: Run Inference (from Jumpbox)
 
 ### Text mode
 
@@ -194,9 +219,9 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME>
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
 ### Audio mode
@@ -207,14 +232,14 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="source ~/venv-maxtext/bin/activate && cd qwen_speech_exp && bash inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=<RUN_NAME>
+    --RUN_NAME=2026-02-08-19-43-48
 ```
 
 ---
 
-## Step 9: Cleanup
+## Step 10: Cleanup
 
 ```bash
 # Delete the jumpbox when done
@@ -237,8 +262,10 @@ All commands run from the jumpbox inside `~/maxtext`.
 
 | Task | Command |
 |------|---------|
-| Setup TPU workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="bash qwen_speech_exp/setup_tpu_worker.sh" --SCRIPT_DIR=$HOME/maxtext` |
-| Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg --ZONE=us-central2-b --INTERNAL_IP=true --COMMAND="source ~/venv-maxtext/bin/activate && CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=<RUN_NAME>` |
+| Clone code on workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="git clone https://github.com/abdo1819/maxtext.git ~/maxtext \|\| (cd ~/maxtext && git pull)" --SCRIPT_DIR=$HOME/maxtext` |
+| Sync code changes | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && git pull" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
+| Install deps on workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup_tpu_worker.sh" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
+| Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
 | SSH into worker N | `gcloud compute tpus tpu-vm ssh qr-v4-32 --worker=N --project=arabic-asr-level2thinkg --zone=us-central2-b --internal-ip` |
 | Convert data | `bash qwen_speech_exp/convert_data.sh` |
 | Train | See Step 7 |
