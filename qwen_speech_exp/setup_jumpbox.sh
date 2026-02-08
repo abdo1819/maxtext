@@ -49,6 +49,7 @@ gcloud compute os-login ssh-keys add --key-file ~/.ssh/google_compute_engine.pub
 
 echo "=== 4/5 Mounting GCS bucket ==="
 sudo mkdir -p /tmp/gcsfuse
+sudo chown "$(whoami)" /tmp/gcsfuse
 gcsfuse --implicit-dirs arabic-asr-dataset /tmp/gcsfuse
 echo "Mounted gs://arabic-asr-dataset at /tmp/gcsfuse"
 
