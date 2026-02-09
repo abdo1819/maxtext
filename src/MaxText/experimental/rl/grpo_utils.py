@@ -48,6 +48,7 @@ def compute_log_probs(
     config,
     is_train=False,
     rngs=None,
+    encoder_audios=None,
 ):
   """Computes per-token log-probabilities for a sequence of tokens.
 
@@ -67,6 +68,8 @@ def compute_log_probs(
     config: The configuration object.
     is_train: Whether to run in training mode (e.g., with dropout).
     rngs: JAX PRNG keys for dropout.
+    encoder_audios: Optional [B, mel_bins, frames] audio mel spectrogram for
+      multimodal models like Qwen3-Omni.
 
   Returns:
     A tuple containing:
@@ -82,6 +85,7 @@ def compute_log_probs(
       inputs,
       inputs_position,
       decoder_segment_ids=inputs_segmentation,
+      encoder_audios=encoder_audios,
       enable_dropout=(config.enable_dropout if is_train else False),
       rngs=rngs,
       mutable="intermediates",
@@ -131,13 +135,27 @@ def generate_offline_completions(config, tokenizer_model, inference_engine, data
   data[f"{config.train_data_columns}_true_length"] = np.asarray(
       jnp.repeat(data[f"{config.train_data_columns}_true_length"], config.num_generations, axis=0)
   )
+  # Repeat audio features G times per prompt if present
+  has_audio = "audios" in data and data["audios"] is not None
+  if has_audio:
+    data["audios"] = np.asarray(jnp.repeat(data["audios"], config.num_generations, axis=0))
+  # Repeat ground truth text for reward computation
+  if "ground_truth_text" in data and data["ground_truth_text"] is not None:
+    gt = data["ground_truth_text"]
+    if isinstance(gt, list):
+      data["ground_truth_text"] = [t for t in gt for _ in range(config.num_generations)]
+    else:
+      data["ground_truth_text"] = np.asarray(jnp.repeat(gt, config.num_generations, axis=0))
+
   input_data = []
   for i, d in enumerate(data[config.train_data_columns]):
+    audio_feat = data["audios"][i] if has_audio else None
     input_data.append(
         InputData(
             id=f"input_{i}",
             tokens=np.array(d),
             true_length=np.array(data[f"{config.train_data_columns}_true_length"][i])[0],
+            audio_features=audio_feat,
         )
     )
 

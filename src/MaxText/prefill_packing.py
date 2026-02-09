@@ -169,11 +169,19 @@ class PrefillProcessor:
       decode_state: DecodeState,
       rng: PRNGKeyType,
       return_prompt_logp: bool = False,
+      audio_values: jax.Array | None = None,
+      audio_masks: jax.Array | None = None,
   ) -> tuple[Any, DecodeState]:
     """Prefill and insert a request."""
 
     prefill_result, first_token = self.engine.prefill(
-        params=params, padded_tokens=tokens, true_length=true_length, rng=rng, return_prompt_logp=return_prompt_logp
+        params=params,
+        padded_tokens=tokens,
+        true_length=true_length,
+        rng=rng,
+        return_prompt_logp=return_prompt_logp,
+        audio_values=audio_values,
+        audio_masks=audio_masks,
     )
     decode_state = self.engine.insert(prefill_result, decode_state, slot)
     if return_prompt_logp:

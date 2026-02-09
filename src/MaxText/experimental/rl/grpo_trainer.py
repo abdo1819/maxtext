@@ -70,7 +70,9 @@ import MaxText as mt
 from MaxText import sharding
 from MaxText import pyconfig
 from MaxText.experimental.rl import grpo_input_pipeline
+from MaxText.experimental.rl import grpo_audio_input_pipeline
 from MaxText.experimental.rl import grpo_utils
+from MaxText.rl import rewards_asr
 from MaxText.globals import EPS
 from MaxText.train import get_first_step
 from maxtext.common import checkpointing, profiler
@@ -223,6 +225,7 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
 
   # compute_log_probs returns logits.
   # We compute the log-probabilities for the entire generated sequence, then shift as usual.
+  encoder_audios = data.get("audios") if config.use_audio else None
   rng1, rng_fwd = random.split(dropout_rng)
   token_logps_policy, intermediate_outputs = grpo_utils.compute_log_probs(
       model,
@@ -234,6 +237,7 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
       config,
       is_train=is_train,
       rngs={"dropout": rng1, "params": rng_fwd},
+      encoder_audios=encoder_audios,
   )  # [BxG,S-1,E]
 
   completion_target_segmentation = data["ar_completions_segmentation"][..., 1:]  # [BxG,S-1]
@@ -243,7 +247,10 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
   valid_seq_mask = completion_target_segmentation != 0  # [BxG, S-1]
 
   # --- (2) Compute a scalar reward for each generated completion via reward_fn.
-  rewards = grpo_utils.dummy_reward_len(valid_seq_mask)
+  if "rewards" in data and data["rewards"] is not None:
+    rewards = data["rewards"]
+  else:
+    rewards = grpo_utils.dummy_reward_len(valid_seq_mask)
   rewards = jnp.array(rewards)  # shape [BxG]
 
   # --- (3) Group rewards and compute normalized advantage.
@@ -286,6 +293,7 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
         config,
         is_train=False,
         rngs={"dropout": rng1, "params": rng_fwd},
+        encoder_audios=encoder_audios,
     )  # [BxG,S-1,E]
 
     token_diff_logps_ref_policy = token_logps_ref - token_logps_policy
@@ -552,7 +560,10 @@ def setup_train_loop(
     init_rng, checkpoint_manager, learning_rate_schedule, tx = train_utils.create_training_tools(config, model, mesh)
 
   with maybe_record_goodput(recorder, GoodputEvent.TRAINING_PREPARATION):
-    data_iterator = grpo_input_pipeline.create_data_iterator(config_inference, inference_mesh)
+    if config.use_audio:
+      data_iterator = grpo_audio_input_pipeline.create_audio_data_iterator(config_inference, inference_mesh)
+    else:
+      data_iterator = grpo_input_pipeline.create_data_iterator(config_inference, inference_mesh)
     state, _, state_mesh_shardings, data_iterator = maxtext_utils.setup_training_state(
         model, data_iterator, tx, config, init_rng, mesh, checkpoint_manager
     )
@@ -608,20 +619,56 @@ def generate_completions(
   """
   with engine_lock:
     thread_example_batch = worker_data_loader.load_next_batch()
+    # Preserve ground_truth_text before tree_map (it may be a list of strings)
+    ground_truth_text = thread_example_batch.pop("ground_truth_text", None)
     # Trim data for inference processing
+    trim_size = int(
+        (worker_config_inference.per_device_batch_size // worker_config_inference.num_generations)
+        * worker_config_train.inference_replicas
+        * worker_config_train.inference_devices_per_replica
+    )
     thread_example_batch_trimmed = jax.tree_util.tree_map(
-        lambda arr: arr[
-            : int(
-                (worker_config_inference.per_device_batch_size // worker_config_inference.num_generations)
-                * worker_config_train.inference_replicas
-                * worker_config_train.inference_devices_per_replica
-            )
-        ],
+        lambda arr: arr[:trim_size],
         thread_example_batch,
     )
+    if ground_truth_text is not None:
+      thread_example_batch_trimmed["ground_truth_text"] = ground_truth_text[:trim_size]
+
     processed_batch = grpo_utils.generate_offline_completions(
         worker_config_inference, worker_tokenizer_model, worker_inference_engine, thread_example_batch_trimmed
     )
+
+    # Compute ASR rewards if audio mode is enabled
+    if worker_config_train.use_audio and "ground_truth_text" in processed_batch:
+      gt_texts = processed_batch["ground_truth_text"]
+      completions_tokens = processed_batch[f"{worker_config_inference.train_data_columns}_completions"]
+      completion_texts = []
+      for i in range(completions_tokens.shape[0]):
+        prompt_len = int(np.array(processed_batch[f"{worker_config_inference.train_data_columns}_true_length"][i])[0])
+        comp_tokens = completions_tokens[i][prompt_len:]
+        # Remove padding tokens
+        comp_tokens = comp_tokens[comp_tokens != 0]
+        text = worker_tokenizer_model.decode(comp_tokens, skip_special_tokens=True)
+        completion_texts.append(text)
+
+      wer_rewards = rewards_asr.asr_wer_reward(
+          prompts=[""] * len(completion_texts),
+          completions=completion_texts,
+          answer=gt_texts if isinstance(gt_texts, list) else list(gt_texts),
+          tmvp_config=worker_config_train,
+      )
+      format_rewards = rewards_asr.asr_format_reward(
+          prompts=[""] * len(completion_texts),
+          completions=completion_texts,
+          tmvp_config=worker_config_train,
+      )
+      combined_rewards = np.array(
+          [w + f for w, f in zip(wer_rewards, format_rewards)], dtype=np.float32
+      )
+      processed_batch["rewards"] = combined_rewards
+      # Remove ground_truth_text before device_put (it's not a JAX array)
+      processed_batch.pop("ground_truth_text", None)
+
     processed_batch = jax.device_put(processed_batch, worker_input_data_shardings)
   return processed_batch
 

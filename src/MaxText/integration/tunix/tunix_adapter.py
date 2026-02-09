@@ -93,3 +93,48 @@ class TunixMaxTextAdapter(nnx.Module):
       return {}
 
     return self._vllm_weight_mapping.lora_to_hf_mappings()
+
+
+class TunixMaxTextAudioAdapter(TunixMaxTextAdapter):
+  """Adapter for multimodal Transformer models that supports audio input.
+
+  Stores audio features as instance state that gets injected into the
+  base model's forward pass. Call set_audio() before each forward pass
+  to provide the audio mel spectrogram for the current batch.
+  """
+
+  def __init__(
+      self,
+      base_model: Transformer,
+      use_standalone_mappings: bool = True,
+      use_no_op_mappings: bool = False,
+  ):
+    super().__init__(base_model, use_standalone_mappings, use_no_op_mappings)
+    self._current_audio: Array | None = None
+
+  def set_audio(self, audio_features: Array | None):
+    """Set the audio features for the next forward pass.
+
+    Args:
+      audio_features: Mel spectrogram array of shape [B, mel_bins, frames],
+        or None to disable audio for the next forward pass.
+    """
+    self._current_audio = audio_features
+
+  def __call__(
+      self,
+      input_tokens: Array,
+      positions: Array,
+      cache: Optional[Any],
+      attention_mask: Optional[Array],
+      decoder_segment_ids: Optional[Array] = None,
+      output_hidden_states: bool = False,
+  ) -> Tuple[Array, None]:
+    """Forward with audio support. Returns logits, None."""
+    logits = self.base(
+        decoder_input_tokens=input_tokens,
+        decoder_positions=positions,
+        decoder_segment_ids=decoder_segment_ids,
+        encoder_audios=self._current_audio,
+    )
+    return logits, None

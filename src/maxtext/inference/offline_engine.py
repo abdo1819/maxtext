@@ -70,6 +70,8 @@ class InputData:
   id: str
   tokens: jax.Array | np.ndarray
   true_length: int
+  audio_features: jax.Array | np.ndarray | None = None  # (mel_bins, frames)
+  audio_mask: jax.Array | np.ndarray | None = None  # (frames,)
 
 
 @dataclasses.dataclass
@@ -179,7 +181,8 @@ class PrefillHelper:
 
   @functools.partial(jax.jit, static_argnums=(0), donate_argnames=("decode_state",))
   def _jitted_single_prefill(
-      self, params, tokens, slot, true_length, decode_state, rng
+      self, params, tokens, slot, true_length, decode_state, rng,
+      audio_values=None, audio_masks=None,
   ) -> tuple[jax.Array, jax.Array, DecodeState, jax.Array] | tuple[jax.Array, jax.Array, DecodeState]:
     """Prefill a single input."""
     # pylint: disable=protected-access
@@ -191,6 +194,8 @@ class PrefillHelper:
         decode_state,
         rng,
         return_prompt_logp=True,
+        audio_values=audio_values,
+        audio_masks=audio_masks,
     )
 
     return (
@@ -208,6 +213,8 @@ class PrefillHelper:
       input_tokens_padded: jax.Array,
       input_true_length: int,
       prefill_done: Callable,
+      audio_values: jax.Array | None = None,
+      audio_masks: jax.Array | None = None,
   ) -> None:
     """Process an input through the appropriate prefill processor.
 
@@ -219,6 +226,8 @@ class PrefillHelper:
         input_tokens_padded: Padded token array for the input
         input_true_length: Actual length of the input before padding
         prefill_done: Callback function called when prefill completes
+        audio_values: Optional audio mel spectrogram features for multimodal prefill
+        audio_masks: Optional audio mask for multimodal prefill
     """
     padded_length = len(input_tokens_padded)
     # Use default processor if configured or if input is already at max length
@@ -230,6 +239,8 @@ class PrefillHelper:
           input_true_length,
           decode_state,
           self.rng,
+          audio_values=audio_values,
+          audio_masks=audio_masks,
       )
       prefill_done(
           [PrefillResult(first_token, decode_slot, prompt_logp)],
@@ -514,6 +525,8 @@ class InferenceWorker:
           input_tokens_padded=row.tokens,
           input_true_length=row.true_length,
           prefill_done=self.prefill_done,
+          audio_values=row.audio_features,
+          audio_masks=row.audio_mask,
       )
 
       # 4. Flush any pending inputs in batch prefill mode
