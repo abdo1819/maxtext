@@ -934,7 +934,10 @@ class OfflineEngine:
         padded_tokens = item.tokens[:target_length]
 
         # Create new InputData with padded tokens
-      padded_data.append(InputData(id=item.id, tokens=padded_tokens, true_length=item.true_length))
+      padded_data.append(InputData(
+          id=item.id, tokens=padded_tokens, true_length=item.true_length,
+          audio_features=item.audio_features, audio_mask=item.audio_mask,
+      ))
 
     return padded_data
 

@@ -35,6 +35,7 @@ from MaxText.input_pipeline._audio_data_processing import (
     ResampleAudio,
     AudioToMelSpectrogram,
 )
+from MaxText.input_pipeline import input_pipeline_interface
 from MaxText.input_pipeline._grain_data_processing import get_datasets
 from maxtext.multimodal.processor_qwen3_omni import (
     QWEN3_OMNI_AUDIO_START_TOKEN,
