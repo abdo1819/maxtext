@@ -1,21 +1,27 @@
-# Audio SFT test config with Tunix gradient accumulation for Qwen3-Omni (tiny model)
+# Audio SFT test config for Qwen3-Omni (tiny model) with Tunix gradient accumulation
 # Uses the qwen3-omni-test model config with drastically reduced dimensions.
+#
+# This config uses the same test data as GRPO audio to verify the audio SFT
+# pipeline works end-to-end with Tunix PeftTrainer.
 #
 # Usage:
 #   python3 -m maxtext.trainers.post_train.sft.train_sft \
 #     src/maxtext/configs/sft_audio_qwen3_omni_test.yml \
-#     model_name=qwen3-omni-test steps=5
+#     steps=5
 
 base_config: "base.yml"
 model_name: "qwen3-omni-test"
 
 # ====== SFT Settings ======
-use_sft: true
-use_tunix_gradient_accumulation: true
-# Train on full sequence including audio tokens (not completion only)
-sft_train_on_completion_only: false
-# Multimodal SFT doesn't support packing
-packing: false
+use_sft: True
+use_tunix_gradient_accumulation: True
+# Must be True for multimodal SFT (validation constraint in MaxTextConfig)
+sft_train_on_completion_only: True
+# Packing not supported for multimodal SFT
+packing: False
+
+# ====== Gradient Accumulation ======
+gradient_accumulation_steps: 2
 
 # ====== Multimodal / Audio ======
 use_multimodal: true
@@ -24,13 +30,11 @@ freeze_audio_encoder_params: true
 freeze_vision_encoder_params: true
 
 # ====== Sequence Lengths ======
-max_prefill_predict_length: 128
 max_target_length: 256
 
 # ====== Data ======
 dataset_type: grain
 grain_file_type: arrayrecord
-train_data_columns: 'ar'
 grain_train_files: "/tmp/test_grpo_data/test_audio_grpo.arrayrecord"
 
 # ====== Tokenizer ======
@@ -41,7 +45,6 @@ tokenizer_path: "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 weight_dtype: 'bfloat16'
 attention: 'dot_product'
 per_device_batch_size: 2
-gradient_accumulation_steps: 2
 learning_rate: 1.0e-5
 enable_dropout: false
 steps: 5
@@ -54,7 +57,7 @@ add_eos: false
 base_output_directory: "/tmp/sft_audio_test_output"
 enable_checkpointing: false
 
-# ====== Disable eval (no eval data for this test) ======
+# ====== Disable evaluation (train only) ======
 eval_interval: -1
 
 # ====== Disable unnecessary features ======

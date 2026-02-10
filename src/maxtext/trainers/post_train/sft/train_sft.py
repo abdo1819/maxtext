@@ -198,6 +198,8 @@ def main(argv: Sequence[str]) -> None:
   pathwaysutils.initialize()
   os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 
+  # Filter empty strings injected by pathwaysutils
+  argv = [a for a in argv if a]
   mt_config = pyconfig.initialize(argv)
   max_utils.print_system_information()
 
