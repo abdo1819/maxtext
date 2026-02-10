@@ -929,7 +929,7 @@ class DatasetGeneral(BaseModel):
       description="The batch size per device for evaluation. Defaults to per_device_batch_size.",
   )
   max_corpus_chars: int = Field(10_000_000, description="Maximum number of characters to use from the corpus.")
-  train_data_columns: list[str] = Field(["text"], description="Column(s) to use from the training data.")
+  train_data_columns: str | list[str] = Field(["text"], description="Column(s) to use from the training data.")
   train_image_column: str | list[str] = Field("image", description="Column name(s) for images in the training data.")
   eval_data_columns: list[str] = Field(["text"], description="Column(s) to use from the evaluation data.")
   eval_image_column: str | list[str] = Field("image", description="Column name(s) for images in evaluation data.")
@@ -1028,6 +1028,9 @@ class FineTuning(BaseModel):
       False, description="If True, trains only on the completion part of the text."
   )
   use_grpo: None | bool = Field(None, description="If True, enables Group Relative Policy Optimization.")
+  num_generations: int = Field(2, description="Number of responses to generate per prompt (G in GRPO paper).")
+  grpo_beta: float = Field(0.08, description="Coefficient for the KL divergence penalty (beta).")
+  grpo_epsilon: float = Field(0.2, description="Epsilon value for clipping in the GRPO loss.")
 
 
 class Distillation(BaseModel):
@@ -1529,6 +1532,11 @@ class RLHardware(BaseModel):
   rollout_tensor_parallelism: int = Field(
       -1, description="Tensor parallelism per replica for rollout. If not specified, it will be auto-determined."
   )
+  inference_rollouts: int = Field(
+      1, description="Frequency in training steps to reshard and copy training params to the inference mesh."
+  )
+  inference_devices_per_replica: int = Field(4, description="Number of devices per inference replica.")
+  inference_replicas: int = Field(1, description="Number of inference replicas.")
 
 
 class VLLM(BaseModel):
@@ -1597,6 +1605,10 @@ class Reward(BaseModel):
   )
   penalty_incorrect_format: float = Field(-0.5, description="Penalty for an incorrect format.")
   penalty_incorrect_answer: float = Field(-1.0, description="Penalty for an incorrect answer.")
+  asr_reward_cap: float = Field(2.0, description="Maximum WER/CER penalty magnitude for ASR reward.")
+  asr_exact_match_bonus: float = Field(3.0, description="Bonus reward for exact transcription match in ASR.")
+  asr_format_bonus: float = Field(1.0, description="Bonus for correct chain-of-thought format in ASR.")
+  asr_no_answer_penalty: float = Field(-2.0, description="Penalty when no answer tags are found in ASR output.")
 
 
 class SpecialTokens(BaseModel):

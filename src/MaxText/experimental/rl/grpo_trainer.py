@@ -380,12 +380,12 @@ def train_step(model, config, state_mesh_shardings, params_shardings, state, dat
       (_, aux), cur_batch_gradient = grad_func(
           model, config, data, dropout_rng, state.params, *extra_grpo_args, is_train=True
       )
-      acc_grad_and_loss["loss"] += aux["total_loss"]
-      acc_grad_and_loss["moe_lb_loss"] += aux["moe_lb_loss"]
+      acc_grad_and_loss["loss"] += aux.total_loss
+      acc_grad_and_loss["moe_lb_loss"] += aux.moe_lb_loss
       acc_grad_and_loss["grad"] = jax.tree_util.tree_map(
-          lambda x, y: x * aux["total_weights"] + y, cur_batch_gradient, acc_grad_and_loss["grad"]
+          lambda x, y: x * aux.total_weights + y, cur_batch_gradient, acc_grad_and_loss["grad"]
       )
-      acc_grad_and_loss["total_weights"] += aux["total_weights"]
+      acc_grad_and_loss["total_weights"] += aux.total_weights
       return acc_grad_and_loss, aux
 
     def reshape_to_microbatch_accumulations(batch_arr):
@@ -486,9 +486,9 @@ def eval_step(model, config, state, data, dropout_rng):
 
   eval_loss_fn = functools.partial(_loss_fn, model, config, data, dropout_rng, is_train=False)
   loss, aux = eval_loss_fn(state.params, *extra_grpo_args)
-  total_loss = aux["total_loss"]
-  total_weights = aux["total_weights"]
-  moe_lb_loss = aux["moe_lb_loss"]
+  total_loss = aux.total_loss
+  total_weights = aux.total_weights
+  moe_lb_loss = aux.moe_lb_loss
   metrics = {
       "scalar": {
           "evaluation/loss": loss,
@@ -498,7 +498,7 @@ def eval_step(model, config, state, data, dropout_rng):
       },
   }
   if config.use_dpo:
-    metrics["scalar"]["evaluation/grpo_reward_accuracy"] = aux["reward_accuracy"]
+    metrics["scalar"]["evaluation/grpo_reward_accuracy"] = aux.reward_accuracy
 
   return metrics
 

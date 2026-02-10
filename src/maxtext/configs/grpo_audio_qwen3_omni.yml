@@ -26,6 +26,7 @@ freeze_audio_encoder_params: true
 freeze_vision_encoder_params: true
 
 # ====== GRPO Settings ======
+use_grpo: true
 num_generations: 4
 grpo_beta: 0.04
 grpo_epsilon: 0.2
@@ -50,6 +51,7 @@ max_target_length: 1024
 # ====== Data ======
 dataset_type: grain
 grain_file_type: arrayrecord
+train_data_columns: 'ar'
 # Override these via CLI or env:
 # grain_train_files: "/path/to/audio_arrayrecord/"
 
@@ -58,6 +60,14 @@ tokenizer_type: "huggingface"
 # Override via CLI:
 # tokenizer_path: "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 
+# ====== Inference / Rollout ======
+decode_sampling_strategy: "weighted"
+decode_sampling_temperature: 0.9
+return_log_prob: true
+inference_rollouts: 5
+inference_devices_per_replica: 4
+inference_replicas: 1
+
 # ====== Training ======
 weight_dtype: 'bfloat16'
 attention: 'dot_product'
@@ -65,7 +75,10 @@ per_device_batch_size: 1
 learning_rate: 1.0e-6
 enable_dropout: false
 steps: 1000
-inference_rollouts: 5
+async_checkpointing: false
+
+add_bos: false
+add_eos: false
 
 # ====== Checkpointing ======
 # Override via CLI:
