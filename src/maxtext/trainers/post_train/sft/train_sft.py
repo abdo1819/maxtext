@@ -123,7 +123,9 @@ def use_maxtext_loss_function(trainer, mt_config):
     The trainer configured with the MaxText loss function.
   """
 
-  def loss_func(model, inputs, inputs_position, inputs_segmentation, targets, targets_position, targets_segmentation):
+  def loss_func(
+      model, inputs, inputs_position, inputs_segmentation, targets, targets_position, targets_segmentation, audios=None
+  ):
     data = {
         "inputs": inputs,
         "inputs_position": inputs_position,
@@ -132,6 +134,8 @@ def use_maxtext_loss_function(trainer, mt_config):
         "targets_position": targets_position,
         "targets_segmentation": targets_segmentation,
     }
+    if audios is not None:
+      data["audios"] = audios
     return loss_fn(model, mt_config, data, dropout_rng=None, params=None, is_train=True)
 
   trainer = trainer.with_loss_fn(loss_func, has_aux=True)
