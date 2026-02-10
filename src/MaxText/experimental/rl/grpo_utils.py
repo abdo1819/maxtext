@@ -228,10 +228,14 @@ def pathways_reshard(config, inference_engine, params, source_shardings, source_
   else:
     params_to_reshard = params
 
-  with (
-      jax.transfer_guard_device_to_host("disallow_explicit"),
-      jax.transfer_guard_host_to_device("disallow_explicit"),
-  ):
+  try:
+    with (
+        jax.transfer_guard_device_to_host("disallow_explicit"),
+        jax.transfer_guard_host_to_device("disallow_explicit"),
+    ):
+      resharded_params = reshard_pytree(params_to_reshard, destination_shardings)
+  except Exception:  # pylint: disable=broad-except
+    # Fallback without transfer guards for non-Pathways environments
     resharded_params = reshard_pytree(params_to_reshard, destination_shardings)
   inference_engine.update_params(resharded_params)
 
@@ -612,15 +616,18 @@ def reshard_pytree(
       _get_dst_sharding,
       target,
   )
-  reshard_fn = _get_reshard_fn(
-      cache_resharding_plans=cache_plan,
-      donate=donate_input,
-      use_experimental_pre_reshard=use_experimental_pre_reshard,
-      get_reshard_fns=[
-          _get_reshard_fn_pathwaysutils,
-      ],
-  )
-
-  resharded_array = reshard_fn(source, dst_shardings)
+  try:
+    reshard_fn = _get_reshard_fn(
+        cache_resharding_plans=cache_plan,
+        donate=donate_input,
+        use_experimental_pre_reshard=use_experimental_pre_reshard,
+        get_reshard_fns=[
+            _get_reshard_fn_pathwaysutils,
+        ],
+    )
+    resharded_array = reshard_fn(source, dst_shardings)
+  except (ValueError, Exception) as e:  # pylint: disable=broad-except
+    max_logging.log(f"Pathways reshard failed ({e}), falling back to jax.device_put")
+    resharded_array = jax.device_put(source, dst_shardings)
   resharded_array = jax.block_until_ready(resharded_array)
   return resharded_array

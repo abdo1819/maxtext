@@ -586,6 +586,7 @@ class Decoder(nn.Module):
           "llama4-17b-16e",
           "llama4-17b-128e",
           "qwen3-omni-30b-a3b",
+          "qwen3-omni-test",
       ]:
         y = mm_utils.merge_mm_embeddings(
             text_embeddings=y,
@@ -598,7 +599,7 @@ class Decoder(nn.Module):
         raise ValueError(f"Unsupported model_name for multimodal: {cfg.model_name}")
 
     if audio_embeddings is not None and cfg.use_audio:
-      if cfg.model_name in ["qwen3-omni-30b-a3b"]:
+      if cfg.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
         y = mm_utils.merge_mm_embeddings(
             text_embeddings=y,
             multimodal_embeddings=audio_embeddings,

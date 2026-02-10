@@ -210,7 +210,13 @@ def create_audio_data_iterator(config, mesh):
   Returns:
     An iterator yielding batches of audio GRPO data.
   """
-  process_indices = input_pipeline_interface.get_process_loading_real_data(config, mesh)
+  process_indices = input_pipeline_interface.get_process_loading_real_data(
+      config.data_sharding,
+      config.global_batch_size_to_load,
+      config.global_batch_size_to_train_on,
+      config.max_target_length,
+      mesh,
+  )
 
   train_ds = get_datasets(
       config.grain_train_files,

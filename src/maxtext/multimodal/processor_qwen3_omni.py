@@ -650,13 +650,14 @@ def get_dummy_image_shape_for_init_qwen3_omni(batch_size):
   return image_shape
 
 
-def get_dummy_audio_shape_for_init_qwen3_omni(config):
+def get_dummy_audio_shape_for_init_qwen3_omni(config, batch_size=None):
   """Return the shape of the dummy audio for Qwen3-Omni model's initialization."""
   # Audio shape: (batch, num_mel_bins, audio_length)
   # audio_length must be divisible by n_window * 2
   chunk_size = config.n_window_for_audio * 2
   audio_length = chunk_size * 4  # 4 chunks
-  audio_shape = (config.micro_batch_size_to_train_on, config.num_mel_bins_for_audio, audio_length)
+  bs = batch_size if batch_size is not None else config.micro_batch_size_to_train_on
+  audio_shape = (bs, config.num_mel_bins_for_audio, audio_length)
   return audio_shape
 
 

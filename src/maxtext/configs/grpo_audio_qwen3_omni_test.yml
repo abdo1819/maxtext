@@ -1,0 +1,84 @@
+# Audio GRPO test config for Qwen3-Omni (tiny model) on v4-8
+# Uses the qwen3-omni-test model config with drastically reduced dimensions.
+#
+# v4-8 layout: 4 chips total
+#   - 2 chips for inference (rollout)
+#   - 2 chips for training
+#
+# Usage:
+#   python3 -m MaxText.experimental.rl.grpo_trainer \
+#     src/maxtext/configs/grpo_audio_qwen3_omni_test.yml \
+#     src/maxtext/configs/grpo_audio_qwen3_omni_test.yml \
+#     steps=5
+
+base_config: "base.yml"
+model_name: "qwen3-omni-test"
+
+# ====== Multimodal / Audio ======
+use_multimodal: true
+use_audio: true
+freeze_audio_encoder_params: true
+freeze_vision_encoder_params: true
+
+# ====== GRPO Settings ======
+use_grpo: true
+num_generations: 2
+grpo_beta: 0.04
+grpo_epsilon: 0.2
+
+# Chain-of-thought format tokens for ASR
+reasoning_start_token: '<reasoning>'
+reasoning_end_token: '</reasoning>'
+solution_start_token: '<answer>'
+solution_end_token: '</answer>'
+
+# Reward parameters for ASR
+reward_exact_format_match: 3.0
+asr_reward_cap: 2.0
+asr_exact_match_bonus: 3.0
+asr_format_bonus: 1.0
+asr_no_answer_penalty: -2.0
+
+# ====== Sequence Lengths ======
+max_prefill_predict_length: 128
+max_target_length: 256
+
+# ====== Data ======
+dataset_type: grain
+grain_file_type: arrayrecord
+train_data_columns: 'ar'
+grain_train_files: "/tmp/test_grpo_data/test_audio_grpo.arrayrecord"
+
+# ====== Tokenizer ======
+tokenizer_type: "huggingface"
+tokenizer_path: "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+
+# ====== Inference / Rollout ======
+decode_sampling_strategy: "weighted"
+decode_sampling_temperature: 0.9
+return_log_prob: true
+inference_rollouts: 1
+# v4-8: 2 chips for inference, 2 for training
+inference_devices_per_replica: 2
+inference_replicas: 1
+
+# ====== Training ======
+weight_dtype: 'bfloat16'
+attention: 'dot_product'
+per_device_batch_size: 2
+learning_rate: 1.0e-5
+enable_dropout: false
+steps: 10
+async_checkpointing: false
+
+add_bos: false
+add_eos: false
+
+# ====== Output ======
+base_output_directory: "/tmp/grpo_audio_test_output"
+enable_checkpointing: false
+
+# ====== Disable unnecessary features ======
+enable_goodput_recording: false
+monitor_goodput: false
+enable_tensorboard: false

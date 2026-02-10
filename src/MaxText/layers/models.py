@@ -154,8 +154,12 @@ class TransformerLinenPure(nn.Module):
     audio_embeddings = None
 
     if self.config.use_multimodal and encoder_images is not None:
-      # qwen3-omni-30b-a3b returns deep features from the vision encoder.
-      image_embeddings = self.vision_encoder(input_images=encoder_images, deterministic=not enable_dropout)
+      # qwen3-omni returns (embeddings, deep_feats) from the vision encoder.
+      vision_output = self.vision_encoder(input_images=encoder_images, deterministic=not enable_dropout)
+      if isinstance(vision_output, tuple):
+        image_embeddings = vision_output[0]
+      else:
+        image_embeddings = vision_output
       bidirectional_mask = mm_processor.get_bidirectional_mask_vision(self.config, decoder_input_tokens)
 
     if self.config.use_multimodal and encoder_audios is not None and self.audio_encoder is not None:

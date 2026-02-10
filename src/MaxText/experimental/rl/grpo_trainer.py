@@ -249,6 +249,8 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
   # --- (2) Compute a scalar reward for each generated completion via reward_fn.
   if "rewards" in data and data["rewards"] is not None:
     rewards = data["rewards"]
+    if rewards.ndim > 1:
+      rewards = rewards.reshape(-1)
   else:
     rewards = grpo_utils.dummy_reward_len(valid_seq_mask)
   rewards = jnp.array(rewards)  # shape [BxG]
@@ -555,6 +557,12 @@ def setup_train_loop(
     mesh = model.mesh
     max_logging.log("Inference mesh used for the workload")
     inference_devices = jax.devices()[:num_inference_devices]
+    # Override inference config batch sizes to match the inference device count
+    # (not the full device count used for training)
+    inference_batch = int(config_inference.per_device_batch_size * num_inference_devices)
+    object.__getattribute__(config_inference, "_flat_config")["micro_batch_size_to_train_on"] = inference_batch
+    object.__getattribute__(config_inference, "_flat_config")["global_batch_size_to_train_on"] = inference_batch
+    object.__getattribute__(config_inference, "_flat_config")["global_batch_size_to_load"] = inference_batch
     inference_model = mt.from_config(config_inference, devices=inference_devices)
     inference_mesh = inference_model.mesh
     init_rng, checkpoint_manager, learning_rate_schedule, tx = train_utils.create_training_tools(config, model, mesh)
@@ -618,7 +626,7 @@ def generate_completions(
     engine_lock: A lock to ensure thread-safe use of the inference engine.
   """
   with engine_lock:
-    thread_example_batch = worker_data_loader.load_next_batch()
+    thread_example_batch = worker_data_loader.load_next_batch_pre_sharding()
     # Preserve ground_truth_text before tree_map (it may be a list of strings)
     ground_truth_text = thread_example_batch.pop("ground_truth_text", None)
     # Trim data for inference processing
@@ -665,7 +673,8 @@ def generate_completions(
       combined_rewards = np.array(
           [w + f for w, f in zip(wer_rewards, format_rewards)], dtype=np.float32
       )
-      processed_batch["rewards"] = combined_rewards
+      # Expand to 2D (batch, 1) for device_put sharding compatibility
+      processed_batch["rewards"] = combined_rewards[:, np.newaxis]
       # Remove ground_truth_text before device_put (it's not a JAX array)
       processed_batch.pop("ground_truth_text", None)
 
@@ -812,11 +821,13 @@ def train_loop(config, config_inference, recorder, state=None):
                 processed_batch,
             )
         worker_step += 1
-      except StopIteration:
+      except (StopIteration, exceptions.StopTraining):
         max_logging.log("Data iterator exhausted in generation worker. Stopping.")
         break
       except Exception as e:  # pylint: disable=broad-except
+        import traceback  # pylint: disable=import-outside-toplevel
         max_logging.log(f"Error in generation worker: {e}")
+        max_logging.log(f"Traceback:\n{traceback.format_exc()}")
         break
     max_logging.log("Generation worker thread finished.")
 
@@ -959,6 +970,8 @@ def main(argv: Sequence[str]) -> None:
     os.environ["LIBTPU_INIT_ARGS"] = (
         os.environ.get("LIBTPU_INIT_ARGS", "") + " --xla_tpu_spmd_rng_bit_generator_unsafe=true"
     )
+  # Filter empty strings injected by pathwaysutils
+  argv = [a for a in argv if a]
   configs_argv = max_utils.parse_custom_args(argv)
   config = pyconfig.initialize(configs_argv[0])
   if not config.use_grpo:

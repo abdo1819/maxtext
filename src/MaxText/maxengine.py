@@ -499,6 +499,11 @@ class MaxEngine(_BaseEngine):
         images = images[jnp.newaxis, ...]
         image_masks = image_masks[jnp.newaxis, ...] if image_masks is not None else None
 
+    # Add batch dimension to audio if needed (single-sample prefill)
+    if self.config.use_audio and audio_values is not None:
+      if audio_values.ndim == 2:
+        audio_values = audio_values[jnp.newaxis, ...]
+
     # sequence_indicator will be concatenated to existing_prefix decoder_segment_ids
     start_to_n = jnp.arange(start_position, start_position + input_tokens.shape[1])
     ones_to_keep = start_to_n < full_true_length
@@ -1578,18 +1583,19 @@ class MaxEngine(_BaseEngine):
 
     # pylint: disable=unused-argument
     def init(abstract_params, page_state):
+      decode_batch_size = int(self.config.per_device_batch_size * self.mesh.size)
       x = jnp.ones(
-          (int(self.config.per_device_batch_size * self.mesh.size), 1),
+          (decode_batch_size, 1),
           dtype=jnp.int32,
       )
       dummy_image = jnp.ones(
           mm_processor.get_dummy_image_shape_for_init(
-              model_name=self.config.model_name, batch_size=self.config.per_device_batch_size
+              model_name=self.config.model_name, batch_size=decode_batch_size
           ),
           dtype=jnp.int32,
       )
       dummy_audio = jnp.ones(
-          mm_processor.get_dummy_audio_shape_for_init(self.config),
+          mm_processor.get_dummy_audio_shape_for_init(self.config, batch_size=decode_batch_size),
           dtype=jnp.float32,
       )
       _, cache = self.model.apply(

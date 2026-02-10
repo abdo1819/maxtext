@@ -39,7 +39,7 @@ def preprocess_mm_data(config):
 
     images = [mm_utils.load_image_from_path(p) for p in config.image_path.split(",")]
     processor_outputs = preprocess_mm_data_llama4(images)
-  elif config.model_name in ["qwen3-omni-30b-a3b"]:
+  elif config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
     from maxtext.multimodal.processor_qwen3_omni import preprocess_mm_data_qwen3_omni  # pylint: disable=import-outside-toplevel
 
     processor_outputs = preprocess_mm_data_qwen3_omni(config)
@@ -128,18 +128,19 @@ def get_dummy_image_shape_for_init(model_name, batch_size=1, num_image_per_seque
     from maxtext.multimodal.processor_llama4 import get_dummy_image_shape_for_init_llama4  # pylint: disable=import-outside-toplevel
 
     image_shape = get_dummy_image_shape_for_init_llama4(batch_size, num_image_per_sequence)
-  elif model_name.startswith("qwen3-omni-30b-a3b"):
+  elif model_name.startswith("qwen3-omni"):
     from maxtext.multimodal.processor_qwen3_omni import get_dummy_image_shape_for_init_qwen3_omni  # pylint: disable=import-outside-toplevel
 
     image_shape = get_dummy_image_shape_for_init_qwen3_omni(batch_size)
   return image_shape
 
 
-def get_dummy_audio_shape_for_init(config):
+def get_dummy_audio_shape_for_init(config, batch_size=None):
   """Return the shape of the dummy audio for specific model's initialization.
 
   Args:
     config: Model configuration containing audio parameters
+    batch_size: Optional batch size override. If None, uses config.micro_batch_size_to_train_on.
 
   Returns:
     Tuple representing audio shape: (batch, num_mel_bins, audio_length)
@@ -149,7 +150,7 @@ def get_dummy_audio_shape_for_init(config):
   if config.model_name.startswith("qwen3-omni"):
     from maxtext.multimodal.processor_qwen3_omni import get_dummy_audio_shape_for_init_qwen3_omni  # pylint: disable=import-outside-toplevel
 
-    audio_shape = get_dummy_audio_shape_for_init_qwen3_omni(config)
+    audio_shape = get_dummy_audio_shape_for_init_qwen3_omni(config, batch_size=batch_size)
 
   return audio_shape
 
@@ -165,7 +166,7 @@ def get_bidirectional_mask_vision(config, decoder_input_tokens):
     from maxtext.multimodal.processor_llama4 import LLAMA4_PATCH_TOKEN  # pylint: disable=import-outside-toplevel
 
     bidirectional_mask_vision = decoder_input_tokens == LLAMA4_PATCH_TOKEN
-  elif config.model_name in ["qwen3-omni-30b-a3b"]:
+  elif config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
     from maxtext.multimodal.processor_qwen3_omni import QWEN3_OMNI_IMAGE_TOKEN, QWEN3_OMNI_VIDEO_TOKEN  # pylint: disable=import-outside-toplevel
 
     # Create bidirectional_mask for vision/video token merging
@@ -179,7 +180,7 @@ def get_bidirectional_mask_vision(config, decoder_input_tokens):
 def get_bidirectional_mask_audio(config, decoder_input_tokens):
   """Get the bidirectional mask for specific models."""
   bidirectional_mask_audio = None
-  if config.model_name in ["qwen3-omni-30b-a3b"]:
+  if config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
     from maxtext.multimodal.processor_qwen3_omni import QWEN3_OMNI_AUDIO_TOKEN  # pylint: disable=import-outside-toplevel
 
     # Create bidirectional_mask for audio token merging
