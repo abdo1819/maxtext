@@ -33,8 +33,9 @@ from maxtext.utils import max_logging
 
 # --- Configuration ---
 GCSFUSE_BASE = "/tmp/gcsfuse/grain_data_arrayrecord"
-OUTPUT_DIR = "/tmp/gcsfuse/distillation"
+OUTPUT_DIR = "/tmp/distillation"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "inference_results.jsonl")
+GCS_OUTPUT = "gs://arabic-asr-dataset/distillation/inference_results.jsonl"
 NUM_SAMPLES = 10
 SEED = 42
 N_WINDOW = 50  # n_window_for_audio from model config
@@ -353,6 +354,14 @@ def main(argv):
         f"Batch inference complete. {num_completed} samples processed, {num_errors} errors. "
         f"Output: {OUTPUT_FILE}"
     )
+    # Upload results to GCS
+    import subprocess
+
+    result = subprocess.run(["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT], capture_output=True, text=True)
+    if result.returncode == 0:
+      max_logging.log(f"Uploaded results to {GCS_OUTPUT}")
+    else:
+      max_logging.log(f"Failed to upload to GCS: {result.stderr}")
 
 
 if __name__ == "__main__":
