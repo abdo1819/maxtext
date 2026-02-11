@@ -303,6 +303,9 @@ def main(argv):
           spatial_merge_size=config.spatial_merge_size_for_vit,
           position_id_per_seconds=config.position_id_per_seconds,
       )
+      # get_rope_index returns float32; engine expects int32 for KV cache indexing
+      position_ids = position_ids.astype(np.int32)
+      mrope_position_deltas = mrope_position_deltas.astype(np.int32)
 
       # --- Run inference (all hosts participate) ---
       max_logging.log(
