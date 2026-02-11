@@ -243,7 +243,7 @@ def main(argv):
     for sample_idx, (fpath, record_idx) in enumerate(sample_list):
       # Load the record (all hosts)
       if fpath not in ds_cache:
-        ds_cache[fpath] = ArrayRecordDataSource(fpath)
+        ds_cache[fpath] = grain.ArrayRecordDataSource([fpath])
       ds = ds_cache[fpath]
       raw_record = ds[record_idx]
       record = parse_record(raw_record)
