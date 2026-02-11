@@ -25,7 +25,7 @@ bash "${PROJECT_ROOT}/preflight.sh" 2>/dev/null || true
 # XLA flags for v4 TPU
 export LIBTPU_INIT_ARGS="--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE"
 
-python3 -m MaxText.train "${CONFIG_FILE}" \
+python3 -m MaxText.train "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
     model_name="${MODEL_NAME}" \
     run_name="qwen3-omni-sft-distillation-run1" \
     base_output_directory="${BASE_OUTPUT_DIR}" \

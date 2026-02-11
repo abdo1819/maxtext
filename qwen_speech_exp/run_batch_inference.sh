@@ -19,7 +19,7 @@ bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PA
 bash preflight.sh 2>/dev/null || true && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
 python3 qwen_speech_exp/batch_inference.py \
-    ${CONFIG_FILE} \
+    src/maxtext/configs/base.yml \
     model_name=${MODEL_NAME} \
     tokenizer_path=${TOKENIZER_PATH} \
     tokenizer_type=huggingface \

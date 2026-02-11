@@ -25,7 +25,7 @@ fi
 # --- 4. COMMON ARGS ---
 # Paths we use often
 export TOKENIZER_PATH="${PROJECT_ROOT}/src/maxtext/assets/tokenizers/qwen3-tokenizer/tokenizer.json"
-export CONFIG_FILE="${MAXTEXT_PKG_DIR}/configs/models/qwen3-omni-30b-a3b.yml"
+export CONFIG_FILE="${PROJECT_ROOT}/src/maxtext/configs/models/qwen3-omni-30b-a3b.yml"
 
 
 export TPU_NAME="tpu-v4-32-node"
