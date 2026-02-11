@@ -32,8 +32,7 @@ python3 qwen_speech_exp/batch_inference.py \
     ici_tensor_parallelism=1 \
     scan_layers=false \
     weight_dtype=bfloat16 \
-    quantize_kvcache=true \
-    kv_quant_dtype=int8 \
+    quantize_kvcache=false \
     attention=dot_product \
     use_multimodal=true \
     use_audio=true \

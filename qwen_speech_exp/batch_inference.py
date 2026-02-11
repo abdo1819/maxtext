@@ -24,6 +24,8 @@ from MaxText import maxengine
 from MaxText import pyconfig
 from maxtext.multimodal.processor_qwen3_omni import (
     pre_process_audio_qwen3_omni,
+    get_rope_index,
+    _get_feat_extract_output_lengths,
     QWEN3_OMNI_AUDIO_START_TOKEN,
     QWEN3_OMNI_AUDIO_END_TOKEN,
     QWEN3_OMNI_AUDIO_TOKEN,
@@ -262,9 +264,11 @@ def main(argv):
       audio_features, audio_mask = pre_process_audio_qwen3_omni(audio)
       audio_features = pad_audio_features(audio_features, chunk_size)
 
-      # Compute number of audio tokens
-      num_mel_frames = audio_features.shape[2]
-      num_audio_tokens = num_mel_frames // chunk_size
+      # Compute number of audio tokens: must match audio encoder output count
+      # The encoder processes chunks of 100 mel frames, each producing 13 tokens
+      # via 3 stride-2 convolutions, so total = (padded_frames // 100) * 13
+      padded_mel_frames = audio_features.shape[2]
+      num_audio_tokens = int(_get_feat_extract_output_lengths(np.array(padded_mel_frames)).item())
 
       if num_audio_tokens == 0:
         max_logging.log(f"Skipping too-short audio: {record['sample_id']}")
@@ -284,13 +288,31 @@ def main(argv):
       padded_tokens = np.zeros(max_prefill_length, dtype=np.int32)
       padded_tokens[:true_length] = prompt_tokens
 
+      # Compute MRoPE 3D position IDs for audio tokens
+      tokens_2d = padded_tokens[np.newaxis, :]  # (1, max_prefill_length)
+      attention_mask = np.zeros_like(tokens_2d)
+      attention_mask[0, :true_length] = 1
+      position_ids, mrope_position_deltas = get_rope_index(
+          input_ids=tokens_2d,
+          image_grid_thw=None,
+          video_grid_thw=None,
+          attention_mask=attention_mask,
+          use_audio_in_video=False,
+          audio_lengths=np.array([padded_mel_frames]),
+          spatial_merge_size=config.spatial_merge_size_for_vit,
+          position_id_per_seconds=config.position_id_per_seconds,
+      )
+
       # --- Run inference (all hosts participate) ---
       try:
         rng, rng_prefill = jax.random.split(rng)
         prefill_result, first_token = engine.prefill(
             params=params,
             padded_tokens=padded_tokens,
+            positions=position_ids,
+            mrope_deltas=mrope_position_deltas,
             audio_values=audio_features,
+            audio_masks=audio_mask,
             true_length=true_length,
             rng=rng_prefill,
             slot=0,
