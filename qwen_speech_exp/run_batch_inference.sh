@@ -39,4 +39,4 @@ python3 qwen_speech_exp/batch_inference.py \
     use_audio=true \
     skip_jax_distributed_system=false" \
     --USE_EXISTING_FOLDER=true \
-    --RUN_NAME=batch-inference
+    --RUN_NAME=maxtext
