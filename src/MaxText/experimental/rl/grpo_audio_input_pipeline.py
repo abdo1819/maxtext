@@ -38,6 +38,7 @@ from MaxText.input_pipeline._audio_data_processing import (
 from MaxText.input_pipeline import input_pipeline_interface
 from MaxText.input_pipeline._grain_data_processing import get_datasets
 from maxtext.multimodal.processor_qwen3_omni import (
+    _get_feat_extract_output_lengths,
     QWEN3_OMNI_AUDIO_START_TOKEN,
     QWEN3_OMNI_AUDIO_END_TOKEN,
     QWEN3_OMNI_AUDIO_TOKEN,
@@ -61,9 +62,19 @@ class BuildAudioGRPOPrompt(grain.MapTransform):
   def map(self, example):
     audio_features = example["audio_features"]  # (num_mel_bins, frames)
 
-    # Compute number of audio tokens: frames // (n_window * 2)
-    num_audio_frames = audio_features.shape[1]
-    num_audio_tokens = num_audio_frames // (self.n_window * 2)
+    # Pad mel frames to be divisible by chunk_size (n_window * 2) for the audio encoder
+    chunk_size = self.n_window * 2
+    num_frames = audio_features.shape[1]
+    remainder = num_frames % chunk_size
+    if remainder != 0:
+      pad_len = chunk_size - remainder
+      audio_features = np.pad(audio_features, ((0, 0), (0, pad_len)), constant_values=0.0)
+      example["audio_features"] = audio_features
+
+    # Compute number of audio tokens using the encoder's output length formula.
+    # Each chunk of 100 mel frames produces 13 tokens via 3 stride-2 convolutions.
+    padded_frames = audio_features.shape[1]
+    num_audio_tokens = int(_get_feat_extract_output_lengths(np.array(padded_frames)).item())
 
     # Build prompt: <audio_start> <audio_pad>*N <audio_eos>
     audio_start = np.array([QWEN3_OMNI_AUDIO_START_TOKEN], dtype=np.int32)
