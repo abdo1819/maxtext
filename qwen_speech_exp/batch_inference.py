@@ -13,6 +13,7 @@ Output: gs://arabic-asr-dataset/distillation/inference_results.jsonl
 import os
 import json
 import glob
+import traceback
 
 import numpy as np
 import jax
@@ -304,6 +305,11 @@ def main(argv):
       )
 
       # --- Run inference (all hosts participate) ---
+      max_logging.log(
+          f"Prefilling sample {sample_idx}: mel_frames={padded_mel_frames}, "
+          f"audio_tokens={num_audio_tokens}, true_length={true_length}, "
+          f"positions_shape={position_ids.shape}, audio_shape={audio_features.shape}"
+      )
       try:
         rng, rng_prefill = jax.random.split(rng)
         prefill_result, first_token = engine.prefill(
@@ -360,8 +366,8 @@ def main(argv):
 
       except Exception as e:
         num_errors += 1
-        if is_host0:
-          max_logging.log(f"Error processing {record['sample_id']}: {e}")
+        max_logging.log(f"Error processing {record['sample_id']} on process {jax.process_index()}: {e}")
+        traceback.print_exc()
         if num_errors > 50:
           raise RuntimeError(f"Too many errors ({num_errors}), aborting") from e
 
