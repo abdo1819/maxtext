@@ -72,7 +72,7 @@ def audio_to_wav_bytes(audio_samples, sample_rate=SAMPLE_RATE):
 
 def load_audio_from_arrayrecord(audio_file, record_idx):
   """Load raw audio samples from an ArrayRecord file."""
-  import grain
+  import grain.python as grain
 
   fpath = os.path.join(GCSFUSE_BASE, audio_file)
   ds = grain.ArrayRecordDataSource([fpath])

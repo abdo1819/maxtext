@@ -78,7 +78,7 @@ def select_samples(data_dir, num_samples, seed):
 
   Returns list of (file_path, record_idx) tuples.
   """
-  import grain
+  import grain.python as grain
 
   ar_files = sorted(glob.glob(os.path.join(data_dir, "*.array_record")))
   if not ar_files:
@@ -231,7 +231,7 @@ def main(argv):
   decode_state = engine.init_decode_state(rng_decode)
 
   # --- Process samples ---
-  import grain
+  import grain.python as grain
 
   # Cache open data sources to avoid reopening files
   ds_cache = {}

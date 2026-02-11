@@ -133,7 +133,7 @@ def main():
     by_file[rec["audio_file"]].append(rec)
 
   # Process and write ArrayRecord files
-  import grain
+  import grain.python as grain
 
   total_written = 0
   file_idx = 0
