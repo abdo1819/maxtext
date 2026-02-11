@@ -13,6 +13,8 @@ Output: gs://arabic-asr-dataset/distillation/inference_results.jsonl
 import os
 import json
 import glob
+import subprocess
+import time
 import traceback
 
 import numpy as np
@@ -39,7 +41,7 @@ GCSFUSE_BASE = "/tmp/gcsfuse/grain_data_arrayrecord"
 OUTPUT_DIR = "/tmp/distillation"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "inference_results.jsonl")
 GCS_OUTPUT = "gs://arabic-asr-dataset/distillation/inference_results.jsonl"
-NUM_SAMPLES = 10
+NUM_SAMPLES = 5000
 SEED = 42
 N_WINDOW = 50  # n_window_for_audio from model config
 
@@ -241,6 +243,9 @@ def main(argv):
   ds_cache = {}
   num_completed = len(completed_ids)
   num_errors = 0
+  inference_start_time = time.time()
+  last_gcs_upload_time = time.time()
+  GCS_UPLOAD_INTERVAL = 300  # Upload to GCS every 5 minutes
 
   try:
     for sample_idx, (fpath, record_idx) in enumerate(sample_list):
@@ -361,11 +366,26 @@ def main(argv):
           output_f.flush()
 
           num_completed += 1
+          elapsed = time.time() - inference_start_time
+          samples_done = num_completed - len(completed_ids)  # Samples done this run
+          avg_time = elapsed / samples_done if samples_done > 0 else 0
+          remaining = len(sample_list) - sample_idx - 1
+          eta_min = (avg_time * remaining) / 60
           max_logging.log(
               f"[{num_completed}/{len(sample_list)}] sample_id={record['sample_id']} "
               f"duration={record['duration']:.1f}s "
-              f"gen_tokens={len(generated_tokens)}"
+              f"gen_tokens={len(generated_tokens)} "
+              f"avg={avg_time:.1f}s/sample eta={eta_min:.0f}min"
           )
+
+          # Periodic GCS upload for crash safety
+          if time.time() - last_gcs_upload_time > GCS_UPLOAD_INTERVAL:
+            subprocess.run(
+                ["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT],
+                capture_output=True, text=True,
+            )
+            last_gcs_upload_time = time.time()
+            max_logging.log(f"Periodic upload to GCS ({num_completed} results)")
 
       except Exception as e:
         num_errors += 1
@@ -386,8 +406,6 @@ def main(argv):
         f"Output: {OUTPUT_FILE}"
     )
     # Upload results to GCS
-    import subprocess
-
     result = subprocess.run(["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT], capture_output=True, text=True)
     if result.returncode == 0:
       max_logging.log(f"Uploaded results to {GCS_OUTPUT}")
