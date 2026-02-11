@@ -24,7 +24,7 @@ fi
 
 # --- 4. COMMON ARGS ---
 # Paths we use often
-export TOKENIZER_PATH="${PROJECT_ROOT}/src/maxtext/assets/tokenizers/qwen3-tokenizer/tokenizer.json"
+export TOKENIZER_PATH="${PROJECT_ROOT}/src/maxtext/assets/tokenizers/qwen3-tokenizer"
 export CONFIG_FILE="${PROJECT_ROOT}/src/maxtext/configs/models/qwen3-omni-30b-a3b.yml"
 
 
