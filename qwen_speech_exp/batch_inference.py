@@ -78,7 +78,7 @@ def select_samples(data_dir, num_samples, seed):
 
   Returns list of (file_path, record_idx) tuples.
   """
-  from array_record.python.array_record_module import ArrayRecordDataSource
+  import grain
 
   ar_files = sorted(glob.glob(os.path.join(data_dir, "*.array_record")))
   if not ar_files:
@@ -87,7 +87,7 @@ def select_samples(data_dir, num_samples, seed):
   # Build index of (file, record_idx) for all records
   all_indices = []
   for fpath in ar_files:
-    ds = ArrayRecordDataSource(fpath)
+    ds = grain.ArrayRecordDataSource([fpath])
     n = len(ds)
     for idx in range(n):
       all_indices.append((fpath, idx))
@@ -231,7 +231,7 @@ def main(argv):
   decode_state = engine.init_decode_state(rng_decode)
 
   # --- Process samples ---
-  from array_record.python.array_record_module import ArrayRecordDataSource
+  import grain
 
   # Cache open data sources to avoid reopening files
   ds_cache = {}

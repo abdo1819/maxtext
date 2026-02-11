@@ -133,7 +133,7 @@ def main():
     by_file[rec["audio_file"]].append(rec)
 
   # Process and write ArrayRecord files
-  from array_record.python.array_record_module import ArrayRecordDataSource
+  import grain
 
   total_written = 0
   file_idx = 0
@@ -158,7 +158,7 @@ def main():
       print(f"Warning: ArrayRecord file not found: {fpath}, skipping {len(records_for_file)} records")
       continue
 
-    ds = ArrayRecordDataSource(fpath)
+    ds = grain.ArrayRecordDataSource([fpath])
 
     for cot_rec in records_for_file:
       record_idx = cot_rec["record_idx"]
@@ -217,7 +217,7 @@ def main():
   if total_written > 0:
     sample_file = os.path.join(args.output_dir, "distillation_sft_0000.array_record")
     if os.path.exists(sample_file):
-      ds = ArrayRecordDataSource(sample_file)
+      ds = grain.ArrayRecordDataSource([sample_file])
       sample = parse_full_record(ds[0])
       del ds
       print(f"\nSample record:")
