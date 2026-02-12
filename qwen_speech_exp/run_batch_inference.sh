@@ -18,7 +18,6 @@ python3 tools/orchestration/multihost_runner.py \
 git pull && \
 bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse && \
 bash preflight.sh 2>/dev/null || true && \
-rm -f /tmp/distillation/inference_results.jsonl && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
 python3 qwen_speech_exp/batch_inference.py \
     src/maxtext/configs/base.yml \
@@ -26,9 +25,9 @@ python3 qwen_speech_exp/batch_inference.py \
     tokenizer_path=${TOKENIZER_PATH} \
     tokenizer_type=huggingface \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
-    max_prefill_predict_length=1024 \
-    max_target_length=2048 \
-    per_device_batch_size=1 \
+    max_prefill_predict_length=256 \
+    max_target_length=512 \
+    per_device_batch_size=4 \
     ici_fsdp_parallelism=1 \
     ici_expert_parallelism=16 \
     ici_tensor_parallelism=1 \
