@@ -18,6 +18,8 @@ python3 tools/orchestration/multihost_runner.py \
 git pull && \
 bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse && \
 bash preflight.sh 2>/dev/null || true && \
+mkdir -p /tmp/distillation && \
+gsutil cp gs://arabic-asr-dataset/distillation/inference_results.jsonl /tmp/distillation/inference_results.jsonl 2>/dev/null || true && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
 python3 qwen_speech_exp/batch_inference.py \
     src/maxtext/configs/base.yml \
