@@ -4,24 +4,18 @@ Runs across all 4 TPU hosts cooperatively (model-parallel). The model is sharded
 across all 16 chips via MaxEngine. All hosts participate in every inference step.
 Only host 0 writes output.
 
-Uses continuous batching: all batch slots are filled with samples, one generate
-step advances all slots simultaneously, and finished slots are immediately
-refilled with new samples from the queue.
-
 Usage (via multihost_runner.py from jumpbox):
     python3 qwen_speech_exp/batch_inference.py
 
 Output: gs://arabic-asr-dataset/distillation/inference_results.jsonl
 """
 
-import collections
 import os
 import json
 import glob
 import subprocess
 import time
 import traceback
-from dataclasses import dataclass, field
 
 import numpy as np
 import jax
@@ -50,19 +44,6 @@ GCS_OUTPUT = "gs://arabic-asr-dataset/distillation/inference_results.jsonl"
 NUM_SAMPLES = 5000
 SEED = 42
 N_WINDOW = 50  # n_window_for_audio from model config
-MAX_GEN_STEPS = 256  # max_target(512) - max_prefill(256)
-
-
-@dataclass
-class SlotState:
-  """Tracks the state of a single decode slot in continuous batching."""
-  slot_id: int
-  sample_idx: int
-  record: dict
-  fpath: str
-  record_idx: int
-  generated_tokens: list = field(default_factory=list)
-  active: bool = True
 
 
 def parse_record(raw_record):
@@ -193,73 +174,12 @@ def pad_audio_features(audio_features, chunk_size):
   return audio_features
 
 
-def prepare_sample(record, hf_tokenizer, max_prefill_length, chunk_size, config):
-  """Prepare a single sample for prefill: audio features, tokens, positions.
-
-  Returns None if the sample should be skipped, otherwise returns a dict with
-  all inputs needed for engine.prefill().
-  """
-  audio = record["audio"].astype(np.float32)
-  if len(audio) == 0:
-    max_logging.log(f"Skipping empty audio: {record['sample_id']}")
-    return None
-
-  audio_features, audio_mask = pre_process_audio_qwen3_omni(audio)
-  audio_features = pad_audio_features(audio_features, chunk_size)
-
-  padded_mel_frames = audio_features.shape[2]
-  num_audio_tokens = int(_get_feat_extract_output_lengths(np.array(padded_mel_frames)).item())
-
-  if num_audio_tokens == 0:
-    max_logging.log(f"Skipping too-short audio: {record['sample_id']}")
-    return None
-
-  prompt_tokens = build_prompt_tokens(hf_tokenizer, num_audio_tokens)
-  true_length = len(prompt_tokens)
-
-  if true_length > max_prefill_length:
-    max_logging.log(
-        f"Skipping too-long prompt ({true_length} > {max_prefill_length}): {record['sample_id']}"
-    )
-    return None
-
-  padded_tokens = np.zeros(max_prefill_length, dtype=np.int32)
-  padded_tokens[:true_length] = prompt_tokens
-
-  # Compute MRoPE 3D position IDs for audio tokens
-  tokens_2d = padded_tokens[np.newaxis, :]
-  attention_mask = np.zeros_like(tokens_2d)
-  attention_mask[0, :true_length] = 1
-  position_ids, mrope_position_deltas = get_rope_index(
-      input_ids=tokens_2d,
-      image_grid_thw=None,
-      video_grid_thw=None,
-      attention_mask=attention_mask,
-      use_audio_in_video=False,
-      audio_lengths=np.array([padded_mel_frames]),
-      spatial_merge_size=config.spatial_merge_size_for_vit,
-      position_id_per_seconds=config.position_id_per_seconds,
-  )
-  position_ids = position_ids.astype(np.int32)
-  mrope_position_deltas = mrope_position_deltas.astype(np.int32)
-
-  return {
-      "padded_tokens": padded_tokens,
-      "position_ids": position_ids,
-      "mrope_position_deltas": mrope_position_deltas,
-      "audio_features": audio_features,
-      "audio_mask": audio_mask,
-      "true_length": true_length,
-      "padded_mel_frames": padded_mel_frames,
-      "num_audio_tokens": num_audio_tokens,
-  }
-
-
 def main(argv):
   jax.config.update("jax_default_prng_impl", "unsafe_rbg")
   os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 
   # Build config from command line argv
+  # Filter out non-MaxText args
   config_argv = [a for a in argv if not a.startswith("--")]
   config = pyconfig.initialize(config_argv)
 
@@ -281,12 +201,10 @@ def main(argv):
   max_prefill_length = config.max_prefill_predict_length
   max_target_length = config.max_target_length
   chunk_size = N_WINDOW * 2  # 100
-  total_batch = config.per_device_batch_size * jax.device_count()
 
   max_logging.log(
       f"Engine ready. max_prefill={max_prefill_length}, max_target={max_target_length}, "
-      f"per_device_batch={config.per_device_batch_size}, devices={jax.device_count()}, "
-      f"total_batch_slots={total_batch}"
+      f"devices={jax.device_count()}, local_devices={jax.local_device_count()}"
   )
 
   # --- Select samples (all hosts, deterministic) ---
@@ -294,215 +212,187 @@ def main(argv):
   sample_list = select_samples(data_dir, NUM_SAMPLES, SEED)
   max_logging.log(f"Selected {len(sample_list)} samples for inference")
 
-  # --- Check resume (all hosts load completed_ids for sync) ---
+  # --- Check resume (host 0 only, but all hosts skip the same samples) ---
   completed_ids = set()
   if is_host0:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-  completed_ids = load_completed_ids(OUTPUT_FILE)
-  if completed_ids and is_host0:
-    max_logging.log(f"Resuming: {len(completed_ids)} samples already completed")
+    completed_ids = load_completed_ids(OUTPUT_FILE)
+    if completed_ids:
+      max_logging.log(f"Resuming: {len(completed_ids)} samples already completed")
 
-  # --- Build sample queue (all hosts, deterministic, skip completed) ---
-  import grain.python as grain
-
-  ds_cache = {}
-  sample_queue = collections.deque()
-
-  for sample_idx, (fpath, record_idx) in enumerate(sample_list):
-    if fpath not in ds_cache:
-      ds_cache[fpath] = grain.ArrayRecordDataSource([fpath])
-    ds = ds_cache[fpath]
-    raw_record = ds[record_idx]
-    record = parse_record(raw_record)
-
-    if record["sample_id"] in completed_ids:
-      continue
-
-    sample_queue.append((sample_idx, fpath, record_idx, record))
-
-  max_logging.log(f"Sample queue: {len(sample_queue)} samples to process (skipped {len(completed_ids)} completed)")
-
-  if len(sample_queue) == 0:
-    max_logging.log("All samples already completed. Nothing to do.")
-    for ds in ds_cache.values():
-      del ds
-    return
+  # Broadcast completed count to all hosts for sync
+  completed_count = len(completed_ids)
+  # All hosts need to know which samples to skip, but since we process sequentially
+  # and all hosts must stay in sync, we'll load completed_ids on all hosts
+  if not is_host0:
+    completed_ids = load_completed_ids(OUTPUT_FILE)
 
   # Open output file for appending (host 0 only)
   output_f = None
   if is_host0:
     output_f = open(OUTPUT_FILE, "a")
 
-  # --- Initialize decode state (all hosts) ---
+  # --- Initialize decode state once (all hosts) ---
   rng, rng_decode = jax.random.split(rng)
   decode_state = engine.init_decode_state(rng_decode)
-  max_logging.log(f"Decode state initialized with {total_batch} slots")
 
-  # --- Slot management ---
-  slots = [None] * total_batch  # SlotState or None
+  # --- Process samples ---
+  import grain.python as grain
+
+  # Cache open data sources to avoid reopening files
+  ds_cache = {}
   num_completed = len(completed_ids)
-  num_completed_this_run = 0
   num_errors = 0
   inference_start_time = time.time()
   last_gcs_upload_time = time.time()
-  GCS_UPLOAD_INTERVAL = 300
-
-  def fill_slot(slot_id, sample_info):
-    """Prefill one sample into a slot. All hosts must call this together."""
-    nonlocal decode_state, rng, slots
-    idx, fpath, rec_idx, record = sample_info
-
-    inputs = prepare_sample(record, hf_tokenizer, max_prefill_length, chunk_size, config)
-    if inputs is None:
-      # Sample is invalid, mark slot as empty and return False
-      slots[slot_id] = None
-      return False
-
-    max_logging.log(
-        f"Prefilling slot {slot_id}: sample {idx}, mel_frames={inputs['padded_mel_frames']}, "
-        f"audio_tokens={inputs['num_audio_tokens']}, true_length={inputs['true_length']}"
-    )
-
-    rng, rng_prefill = jax.random.split(rng)
-    prefill_result, first_token = engine.prefill(
-        params=params,
-        padded_tokens=inputs["padded_tokens"],
-        positions=inputs["position_ids"],
-        mrope_deltas=inputs["mrope_position_deltas"],
-        audio_values=inputs["audio_features"],
-        audio_masks=inputs["audio_mask"],
-        true_length=inputs["true_length"],
-        rng=rng_prefill,
-        slot=slot_id,
-    )
-
-    decode_state = engine.insert(prefill_result, decode_state, slot=slot_id)
-
-    # Prefill returns batch-size-1; always use slot 0 to extract
-    first_tok = first_token.get_result_at_slot(0).tokens.item()
-
-    slots[slot_id] = SlotState(
-        slot_id=slot_id,
-        sample_idx=idx,
-        record=record,
-        fpath=fpath,
-        record_idx=rec_idx,
-        generated_tokens=[first_tok],
-        active=True,
-    )
-    return True
+  GCS_UPLOAD_INTERVAL = 300  # Upload to GCS every 5 minutes
 
   try:
-    # --- Fill initial slots ---
-    max_logging.log(f"Filling initial {min(total_batch, len(sample_queue))} slots...")
-    for slot_id in range(total_batch):
-      while sample_queue:
-        sample_info = sample_queue.popleft()
-        try:
-          if fill_slot(slot_id, sample_info):
+    for sample_idx, (fpath, record_idx) in enumerate(sample_list):
+      # Load the record (all hosts)
+      if fpath not in ds_cache:
+        ds_cache[fpath] = grain.ArrayRecordDataSource([fpath])
+      ds = ds_cache[fpath]
+      raw_record = ds[record_idx]
+      record = parse_record(raw_record)
+
+      # Skip if already completed
+      if record["sample_id"] in completed_ids:
+        continue
+
+      # Process audio
+      audio = record["audio"].astype(np.float32)
+      if len(audio) == 0:
+        max_logging.log(f"Skipping empty audio: {record['sample_id']}")
+        continue
+
+      # Get mel spectrogram and pad to chunk-aligned length
+      audio_features, audio_mask = pre_process_audio_qwen3_omni(audio)
+      audio_features = pad_audio_features(audio_features, chunk_size)
+
+      # Compute number of audio tokens: must match audio encoder output count
+      # The encoder processes chunks of 100 mel frames, each producing 13 tokens
+      # via 3 stride-2 convolutions, so total = (padded_frames // 100) * 13
+      padded_mel_frames = audio_features.shape[2]
+      num_audio_tokens = int(_get_feat_extract_output_lengths(np.array(padded_mel_frames)).item())
+
+      if num_audio_tokens == 0:
+        max_logging.log(f"Skipping too-short audio: {record['sample_id']}")
+        continue
+
+      # Build prompt tokens
+      prompt_tokens = build_prompt_tokens(hf_tokenizer, num_audio_tokens)
+      true_length = len(prompt_tokens)
+
+      if true_length > max_prefill_length:
+        max_logging.log(
+            f"Skipping too-long prompt ({true_length} > {max_prefill_length}): {record['sample_id']}"
+        )
+        continue
+
+      # Pad to max_prefill_length
+      padded_tokens = np.zeros(max_prefill_length, dtype=np.int32)
+      padded_tokens[:true_length] = prompt_tokens
+
+      # Compute MRoPE 3D position IDs for audio tokens
+      tokens_2d = padded_tokens[np.newaxis, :]  # (1, max_prefill_length)
+      attention_mask = np.zeros_like(tokens_2d)
+      attention_mask[0, :true_length] = 1
+      position_ids, mrope_position_deltas = get_rope_index(
+          input_ids=tokens_2d,
+          image_grid_thw=None,
+          video_grid_thw=None,
+          attention_mask=attention_mask,
+          use_audio_in_video=False,
+          audio_lengths=np.array([padded_mel_frames]),
+          spatial_merge_size=config.spatial_merge_size_for_vit,
+          position_id_per_seconds=config.position_id_per_seconds,
+      )
+      # get_rope_index returns float32; engine expects int32 for KV cache indexing
+      position_ids = position_ids.astype(np.int32)
+      mrope_position_deltas = mrope_position_deltas.astype(np.int32)
+
+      # --- Run inference (all hosts participate) ---
+      max_logging.log(
+          f"Prefilling sample {sample_idx}: mel_frames={padded_mel_frames}, "
+          f"audio_tokens={num_audio_tokens}, true_length={true_length}, "
+          f"positions_shape={position_ids.shape}, audio_shape={audio_features.shape}"
+      )
+      try:
+        rng, rng_prefill = jax.random.split(rng)
+        prefill_result, first_token = engine.prefill(
+            params=params,
+            padded_tokens=padded_tokens,
+            positions=position_ids,
+            mrope_deltas=mrope_position_deltas,
+            audio_values=audio_features,
+            audio_masks=audio_mask,
+            true_length=true_length,
+            rng=rng_prefill,
+            slot=0,
+        )
+
+        # Insert prefill into decode state (reuses pre-allocated KV cache)
+        decode_state = engine.insert(prefill_result, decode_state, slot=0)
+
+        # Collect first token
+        first_token_id = first_token.get_result_at_slot(0).tokens.item()
+        generated_tokens = [first_token_id]
+
+        # Generate loop
+        for step in range(max_prefill_length, max_target_length):
+          rng, rng_gen = jax.random.split(rng)
+          decode_state, sampled_tokens = engine.generate(params, decode_state, rng=rng_gen)
+          token_id = sampled_tokens.get_result_at_slot(0).tokens.item()
+          generated_tokens.append(token_id)
+          if token_id == eos_id:
             break
-        except Exception as e:
-          num_errors += 1
-          max_logging.log(
-              f"Error prefilling slot {slot_id} sample {sample_info[0]}: {e}"
-          )
-          traceback.print_exc()
-          if num_errors > 50:
-            raise RuntimeError(f"Too many errors ({num_errors}), aborting") from e
-      # If sample_queue is empty and slot wasn't filled, slot stays None
 
-    active_count = sum(1 for s in slots if s is not None and s.active)
-    max_logging.log(f"Initial fill complete. {active_count} active slots out of {total_batch}")
-
-    # --- Generate loop ---
-    max_gen_upper_bound = MAX_GEN_STEPS * 2  # generous upper bound
-    for step in range(max_gen_upper_bound):
-      active_slots = [s for s in slots if s is not None and s.active]
-      if not active_slots:
-        break
-
-      # One generate step — processes ALL slots simultaneously
-      rng, rng_gen = jax.random.split(rng)
-      decode_state, sampled_tokens = engine.generate(params, decode_state, rng=rng_gen)
-
-      # Check each active slot for new tokens
-      finished_slots = []
-      for s in slots:
-        if s is None or not s.active:
-          continue
-        token_id = sampled_tokens.get_result_at_slot(s.slot_id).tokens.item()
-        s.generated_tokens.append(token_id)
-        if token_id == eos_id or len(s.generated_tokens) >= MAX_GEN_STEPS:
-          s.active = False
-          finished_slots.append(s)
-
-      # Save results for finished slots (host 0 only)
-      for s in finished_slots:
+        # Decode output text (host 0)
         if is_host0:
-          output_text = hf_tokenizer.decode(s.generated_tokens, skip_special_tokens=True)
+          output_text = hf_tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+          # Write result
           result = {
-              "sample_id": s.record["sample_id"],
-              "dataset_name": s.record["dataset_name"],
-              "audio_file": os.path.relpath(s.fpath, GCSFUSE_BASE),
-              "record_idx": s.record_idx,
-              "original_text": s.record["text"],
+              "sample_id": record["sample_id"],
+              "dataset_name": record["dataset_name"],
+              "audio_file": os.path.relpath(fpath, GCSFUSE_BASE),
+              "record_idx": record_idx,
+              "original_text": record["text"],
               "model_transcription": output_text,
-              "duration": s.record["duration"],
+              "duration": record["duration"],
           }
           output_f.write(json.dumps(result, ensure_ascii=False) + "\n")
           output_f.flush()
 
           num_completed += 1
-          num_completed_this_run += 1
           elapsed = time.time() - inference_start_time
-          avg_time = elapsed / num_completed_this_run
-          remaining_samples = len(sample_queue) + sum(
-              1 for ss in slots if ss is not None and ss.active
-          )
-          throughput = num_completed_this_run / elapsed
+          samples_done = num_completed - len(completed_ids)  # Samples done this run
+          avg_time = elapsed / samples_done if samples_done > 0 else 0
+          remaining = len(sample_list) - sample_idx - 1
+          eta_min = (avg_time * remaining) / 60
           max_logging.log(
-              f"[{num_completed}/{len(sample_list)}] slot={s.slot_id} "
-              f"sample_id={s.record['sample_id']} "
-              f"duration={s.record['duration']:.1f}s "
-              f"gen_tokens={len(s.generated_tokens)} "
-              f"avg={avg_time:.1f}s/sample throughput={throughput:.2f}samples/s "
-              f"remaining={remaining_samples} queue={len(sample_queue)}"
+              f"[{num_completed}/{len(sample_list)}] sample_id={record['sample_id']} "
+              f"duration={record['duration']:.1f}s "
+              f"gen_tokens={len(generated_tokens)} "
+              f"avg={avg_time:.1f}s/sample eta={eta_min:.0f}min"
           )
 
-      # Refill finished slots with new samples (all hosts)
-      for s in finished_slots:
-        filled = False
-        while sample_queue and not filled:
-          sample_info = sample_queue.popleft()
-          try:
-            filled = fill_slot(s.slot_id, sample_info)
-          except Exception as e:
-            num_errors += 1
-            max_logging.log(
-                f"Error refilling slot {s.slot_id} sample {sample_info[0]}: {e}"
+          # Periodic GCS upload for crash safety
+          if time.time() - last_gcs_upload_time > GCS_UPLOAD_INTERVAL:
+            subprocess.run(
+                ["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT],
+                capture_output=True, text=True,
             )
-            traceback.print_exc()
-            if num_errors > 50:
-              raise RuntimeError(f"Too many errors ({num_errors}), aborting") from e
-        if not filled:
-          slots[s.slot_id] = None  # No more samples for this slot
+            last_gcs_upload_time = time.time()
+            max_logging.log(f"Periodic upload to GCS ({num_completed} results)")
 
-      # Periodic GCS upload (host 0)
-      if is_host0 and time.time() - last_gcs_upload_time > GCS_UPLOAD_INTERVAL:
-        subprocess.run(
-            ["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT],
-            capture_output=True, text=True,
-        )
-        last_gcs_upload_time = time.time()
-        max_logging.log(f"Periodic upload to GCS ({num_completed} results)")
-
-      # Log batch status periodically
-      if is_host0 and step % 50 == 0:
-        active_count = sum(1 for s in slots if s is not None and s.active)
-        max_logging.log(
-            f"Step {step}: {active_count} active slots, "
-            f"{len(sample_queue)} in queue, {num_completed_this_run} completed this run"
-        )
+      except Exception as e:
+        num_errors += 1
+        max_logging.log(f"Error processing {record['sample_id']} on process {jax.process_index()}: {e}")
+        traceback.print_exc()
+        if num_errors > 50:
+          raise RuntimeError(f"Too many errors ({num_errors}), aborting") from e
 
   finally:
     if output_f is not None:
@@ -511,12 +401,11 @@ def main(argv):
       del ds
 
   if is_host0:
-    elapsed = time.time() - inference_start_time
     max_logging.log(
-        f"Batch inference complete. {num_completed} total ({num_completed_this_run} this run), "
-        f"{num_errors} errors. Elapsed: {elapsed:.0f}s. Output: {OUTPUT_FILE}"
+        f"Batch inference complete. {num_completed} samples processed, {num_errors} errors. "
+        f"Output: {OUTPUT_FILE}"
     )
-    # Final upload to GCS
+    # Upload results to GCS
     result = subprocess.run(["gsutil", "cp", OUTPUT_FILE, GCS_OUTPUT], capture_output=True, text=True)
     if result.returncode == 0:
       max_logging.log(f"Uploaded results to {GCS_OUTPUT}")
