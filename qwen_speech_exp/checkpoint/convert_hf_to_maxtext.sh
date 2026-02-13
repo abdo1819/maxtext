@@ -2,7 +2,7 @@
 set -e
 
 # Source the variables
-source ./env_vars.sh
+source "$(dirname "$0")/../env_vars.sh"
 
 echo "=================================================="
 echo "Phase 1: Checking Conversion Status"

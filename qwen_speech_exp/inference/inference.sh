@@ -2,7 +2,7 @@
 set -e
 
 # Source the variables
-source ./env_vars.sh
+source "$(dirname "$0")/../env_vars.sh"
 
 # --- Usage ---
 usage() {

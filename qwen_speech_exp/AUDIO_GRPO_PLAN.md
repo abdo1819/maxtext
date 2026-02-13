@@ -85,7 +85,7 @@ Key: keep `vocab_size` and audio token IDs matching the real tokenizer so the da
 
 ### Step 2: Create small test ArrayRecord dataset
 
-Create a script `qwen_speech_exp/create_test_data.py` that:
+Create a script `qwen_speech_exp/data/create_test_data.py` that:
 - Generates 20-50 short audio samples (synthetic sine waves or noise, 1-3 seconds each at 16kHz)
 - Pairs each with a ground truth transcription string
 - Writes to ArrayRecord format matching the expected schema (`audio`, `text` fields)

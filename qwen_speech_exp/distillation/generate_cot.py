@@ -7,7 +7,7 @@ about confusing/unclear audio parts.
 Runs on the jumpbox (maxtext-vm) — no TPU needed, just internet access.
 
 Usage:
-    python3 qwen_speech_exp/generate_cot.py [--input INPUT] [--output OUTPUT]
+    python3 qwen_speech_exp/distillation/generate_cot.py [--input INPUT] [--output OUTPUT]
         [--rpm RPM] [--max_retries MAX_RETRIES] [--model MODEL]
 """
 

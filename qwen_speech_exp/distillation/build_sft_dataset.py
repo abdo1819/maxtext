@@ -15,7 +15,7 @@ special tokens (IDs 151667/151668).
 Runs on the jumpbox (maxtext-vm).
 
 Usage:
-    python3 qwen_speech_exp/build_sft_dataset.py [--input INPUT] [--output_dir OUTPUT_DIR]
+    python3 qwen_speech_exp/distillation/build_sft_dataset.py [--input INPUT] [--output_dir OUTPUT_DIR]
         [--records_per_file RECORDS_PER_FILE]
 """
 

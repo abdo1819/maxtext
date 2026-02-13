@@ -15,13 +15,49 @@ Fine-tuning **Qwen3-Omni-30B-A3B** (speech/multimodal) on a **TPU v4-32** (4 hos
 
 ### Key Experiment Files
 
-All in `qwen_speech_exp/`:
+All under `qwen_speech_exp/`, organized into subdirectories:
 - `env_vars.sh` — shared paths and model config (sourced by all scripts)
-- `setup_tpu_worker.sh` — installs Python 3.12, PyTorch XLA, JAX on workers
-- `train.sh` — fine-tuning launch (`python3 -m MaxText.train`)
-- `inference_multihost.sh` — multi-host inference (`python3 -m maxtext.decode`)
-- `convert.sh` — HuggingFace-to-MaxText checkpoint conversion
-- `convert_data.sh` / `convert_tfrecord_to_arrayrecord.py` — data conversion
+- `setup/setup_tpu_worker.sh` — installs Python 3.12, PyTorch XLA, JAX on workers
+- `training/train.sh` — fine-tuning launch (`python3 -m MaxText.train`)
+- `inference/inference_multihost.sh` — multi-host inference (`python3 -m maxtext.decode`)
+- `inference/run_batch_inference.sh` / `inference/batch_inference.py` — batch inference
+- `checkpoint/convert_hf_to_maxtext.sh` — HuggingFace-to-MaxText checkpoint conversion
+- `data/convert_data.sh` / `data/convert_tfrecord_to_arrayrecord.py` — data conversion
+- `distillation/generate_cot.py` / `distillation/build_sft_dataset.py` — distillation pipeline
+
+### Dataset (ArrayRecord, converted from TFRecord)
+
+Location: `gs://arabic-asr-dataset/grain_data_arrayrecord/{train,validation,test}/`
+
+**Splits and record counts:**
+
+| Split      | Files | Records  | Size      |
+|------------|-------|----------|-----------|
+| train      | 55    | 520,296  | 169.71 GiB |
+| validation | 12    | 71,673   | 23.09 GiB  |
+| test       | 12    | 71,608   | 23.32 GiB  |
+| **Total**  | **79**| **663,577** | **216.12 GiB** |
+
+**Datasets included (7 sources):**
+- `MohamedRashad/SADA22` — 19 train / 3 val / 3 test shards
+- `MohamedRashad/mgb2_arabic` — 29 train / 4 val / 4 test shards
+- `MohamedRashad/arabic_english_code_switching` — 1 train / 1 val / 1 test shard
+- `fixie_ai/common_voice_17_0` — 3 train / 2 val / 2 test shards
+- `google/fleurs` — 1 train / 1 val / 1 test shard
+- `halabi2016/arabic_speech_corpus` — 1 train / 0 val / 1 test shard
+- `UBC_NLP/Casablanca` — 1 train / 1 val / 0 test shard
+
+**Record schema** (each record is a serialized `tf.train.Example`):
+
+| Feature        | Type        | Description                                      |
+|----------------|-------------|--------------------------------------------------|
+| `audio`        | float_list  | Raw waveform samples (variable length)           |
+| `audio_len`    | int64_list  | Number of audio samples (scalar)                 |
+| `sample_rate`  | int64_list  | Always 16000 Hz (scalar)                         |
+| `duration`     | float_list  | Duration in seconds (scalar)                     |
+| `text`         | bytes_list  | Transcript text, UTF-8 encoded                   |
+| `dataset_name` | bytes_list  | Source dataset identifier                        |
+| `sample_id`    | bytes_list  | Unique sample identifier                         |
 
 ### Deploying Changes to TPU Workers
 

@@ -11,7 +11,7 @@ ParseAudioFeatures in _audio_data_processing.py:
   - 'audio_len': Int64List (number of audio samples)
 
 Usage:
-  python3 qwen_speech_exp/create_test_data.py --output_dir /tmp/test_grpo_data
+  python3 qwen_speech_exp/data/create_test_data.py --output_dir /tmp/test_grpo_data
 """
 
 import argparse

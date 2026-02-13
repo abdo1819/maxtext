@@ -9,7 +9,7 @@ All 4 TPU hosts participate in every inference step (model-parallel).
 Only host 0 writes output.
 
 Usage (via multihost_runner.py from jumpbox):
-    python3 qwen_speech_exp/batch_inference.py <config.yml> [key=value ...]
+    python3 qwen_speech_exp/inference/batch_inference.py <config.yml> [key=value ...]
 
 Output: gs://arabic-asr-dataset/distillation/inference_results.jsonl
 """

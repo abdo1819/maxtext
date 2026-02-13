@@ -7,12 +7,12 @@
 #   python3 tools/orchestration/multihost_runner.py \
 #       --TPU_PREFIX=qr-v4-32 --PROJECT=arabic-asr-level2thinkg \
 #       --ZONE=us-central2-b --INTERNAL_IP=true \
-#       --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/train_sft_distillation.sh" \
+#       --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/training/train_sft_distillation.sh" \
 #       --USE_EXISTING_FOLDER=true --RUN_NAME=sft-distillation
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "${SCRIPT_DIR}/env_vars.sh"
+source "${SCRIPT_DIR}/../env_vars.sh"
 
 # Mount GCS data via gcsfuse
 bash "${PROJECT_ROOT}/tools/setup/setup_gcsfuse.sh" \

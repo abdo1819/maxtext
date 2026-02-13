@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 GCS_BUCKET="gs://arabic-asr-dataset"
 LOCAL_OUTPUT="/tmp/arrayrecord_output"
@@ -13,10 +13,32 @@ bash "${PROJECT_ROOT}/tools/setup/setup_gcsfuse.sh" \
   DATASET_GCS_BUCKET=arabic-asr-dataset \
   MOUNT_PATH=/tmp/gcsfuse
 
-# Initialize tracker JSON if it doesn't exist
+# Initialize tracker JSON — rebuild from GCS if missing
 mkdir -p "${LOCAL_OUTPUT}"
 if [ ! -f "${TRACKER_FILE}" ]; then
-  echo '{}' > "${TRACKER_FILE}"
+  echo "Tracker file not found, rebuilding from GCS..."
+  python3 -c "
+import json, subprocess
+
+tracker = {}
+for split in ['train', 'validation', 'test']:
+    result = subprocess.run(
+        ['gsutil', 'ls', f'${GCS_BUCKET}/grain_data_arrayrecord/{split}/'],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        files = [line.split('/')[-1] for line in result.stdout.strip().split('\n') if line.strip()]
+        tracked = [f for f in files if f.endswith('.array_record')]
+        if tracked:
+            tracker[split] = tracked
+            print(f'  {split}: {len(tracked)} files already in GCS')
+    else:
+        print(f'  {split}: no existing files in GCS')
+
+with open('${TRACKER_FILE}', 'w') as f:
+    json.dump(tracker, f, indent=2)
+print(f'Tracker rebuilt with {sum(len(v) for v in tracker.values())} total files.')
+"
 fi
 
 # Helper: check if a file is already tracked as uploaded

@@ -3,11 +3,11 @@
 # Run this from the jumpbox (maxtext-vm).
 #
 # Usage:
-#   ./qwen_speech_exp/run_batch_inference.sh
+#   ./qwen_speech_exp/inference/run_batch_inference.sh
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "${SCRIPT_DIR}/env_vars.sh"
+source "${SCRIPT_DIR}/../env_vars.sh"
 
 python3 tools/orchestration/multihost_runner.py \
     --TPU_PREFIX=tpu-v4-32-node \
@@ -21,7 +21,7 @@ bash preflight.sh 2>/dev/null || true && \
 mkdir -p /tmp/distillation && \
 gsutil cp gs://arabic-asr-dataset/distillation/inference_results.jsonl /tmp/distillation/inference_results.jsonl 2>/dev/null || true && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
-python3 qwen_speech_exp/batch_inference.py \
+python3 qwen_speech_exp/inference/batch_inference.py \
     src/maxtext/configs/base.yml \
     model_name=${MODEL_NAME} \
     tokenizer_path=${TOKENIZER_PATH} \

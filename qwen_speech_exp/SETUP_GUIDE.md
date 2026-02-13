@@ -67,7 +67,7 @@ Then run the automated setup script:
 
 ```bash
 cd ~/maxtext
-bash qwen_speech_exp/setup_jumpbox.sh
+bash qwen_speech_exp/setup/setup_jumpbox.sh
 ```
 
 This script installs system packages (git, python3-venv), adds Google's apt
@@ -86,7 +86,7 @@ converts locally, then uploads to GCS via gsutil:
 cd ~/maxtext
 source ~/venv/bin/activate
 
-bash qwen_speech_exp/convert_data.sh
+bash qwen_speech_exp/data/convert_data.sh
 ```
 
 The script uploads each file incrementally and tracks progress in
@@ -130,7 +130,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup_tpu_worker.sh" \
+    --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup/setup_tpu_worker.sh" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=2026-02-08-19-43-48
 ```
@@ -200,7 +200,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/train.sh" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/training/train.sh" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=2026-02-08-19-43-48
 ```
@@ -219,7 +219,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference/inference_multihost.sh --mode text --prompt 'What is machine learning?'" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=2026-02-08-19-43-48
 ```
@@ -232,7 +232,7 @@ python3 tools/orchestration/multihost_runner.py \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
-    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
+    --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && bash qwen_speech_exp/inference/inference_multihost.sh --mode audio --prompt 'Transcribe this audio' --audio /tmp/gcsfuse/test_audio.wav" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=2026-02-08-19-43-48
 ```
@@ -264,10 +264,10 @@ All commands run from the jumpbox inside `~/maxtext`.
 |------|---------|
 | Clone code on workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="git clone https://github.com/abdo1819/maxtext.git ~/maxtext \|\| (cd ~/maxtext && git pull)" --SCRIPT_DIR=$HOME/maxtext` |
 | Sync code changes | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && git pull" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
-| Install deps on workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup_tpu_worker.sh" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
+| Install deps on workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && bash qwen_speech_exp/setup/setup_tpu_worker.sh" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
 | Run cmd on all workers | `python3 tools/orchestration/multihost_runner.py ... --COMMAND="cd ~/maxtext && source ~/venv-maxtext/bin/activate && CMD" --USE_EXISTING_FOLDER=true --RUN_NAME=2026-02-08-19-43-48` |
 | SSH into worker N | `gcloud compute tpus tpu-vm ssh qr-v4-32 --worker=N --project=arabic-asr-level2thinkg --zone=us-central2-b --internal-ip` |
-| Convert data | `bash qwen_speech_exp/convert_data.sh` |
+| Convert data | `bash qwen_speech_exp/data/convert_data.sh` |
 | Train | See Step 7 |
 | Inference | See Step 8 |
 | Check TPU devices | See Step 6 |
@@ -278,14 +278,51 @@ All commands run from the jumpbox inside `~/maxtext`.
 
 ```
 qwen_speech_exp/
-├── SETUP_GUIDE.md                      # This file
-├── env_vars.sh                         # Environment variables (paths, model name)
-├── setup_jumpbox.sh                    # Jumpbox bootstrap script
-├── convert.sh                          # HF -> MaxText checkpoint conversion
-├── convert_data.sh                     # TFRecord -> ArrayRecord data conversion
-├── convert_tfrecord_to_arrayrecord.py  # Python converter script
-├── setup_tpu_worker.sh                 # TPU worker setup (Python 3.12 + deps)
-├── train.sh                            # Training launch script (v4-32, 16 chips)
-├── inference.sh                        # Single-host inference (4 chips)
-└── inference_multihost.sh              # Multi-host inference (16 chips)
+├── env_vars.sh                                    # Shared paths and model config
+├── SETUP_GUIDE.md                                 # This file
+├── AUDIO_GRPO_PLAN.md                             # GRPO training plan
+├── setup/
+│   ├── setup_jumpbox.sh                           # Jumpbox bootstrap script
+│   └── setup_tpu_worker.sh                        # TPU worker setup (Python 3.12 + deps)
+├── data/
+│   ├── convert_data.sh                            # TFRecord -> ArrayRecord conversion
+│   ├── convert_tfrecord_to_arrayrecord.py         # Python converter script
+│   └── create_test_data.py                        # Synthetic test data generator
+├── checkpoint/
+│   ├── convert_hf_to_maxtext.sh                   # HF -> MaxText checkpoint conversion
+│   ├── convert_ckpt_bf16.sh                       # fp32 -> bf16 checkpoint conversion
+│   └── convert_ckpt_to_bf16.py                    # bf16 conversion script
+├── inference/
+│   ├── inference.sh                               # Single-host inference (4 chips)
+│   ├── inference_multihost.sh                     # Multi-host inference (16 chips)
+│   ├── run_batch_inference.sh                     # Batch inference launcher
+│   └── batch_inference.py                         # Batch inference engine
+├── training/
+│   ├── train.sh                                   # Fine-tuning launch script
+│   └── train_sft_distillation.sh                  # SFT distillation training
+└── distillation/
+    ├── generate_cot.py                            # Stage 2: Gemini CoT generation
+    └── build_sft_dataset.py                       # Stage 3: Build SFT ArrayRecord
 ```
+
+
+ All 5 files are in place and pass syntax verification. The implementation of the distillation data pipeline is complete:
+  ┌─────┬─────────────────────────────────────────────┬────────────────────────────────────────────┬─────────────────────────┐
+  │  #  │                    File                     │                  Purpose                   │         Runs on         │
+  ├─────┼─────────────────────────────────────────────┼────────────────────────────────────────────┼─────────────────────────┤
+  │ 1   │ batch_inference.py + run_batch_inference.sh │ Stage 1: Batch inference on 5000 samples   │ TPU v4-32 (all 4 hosts) │
+  ├─────┼─────────────────────────────────────────────┼────────────────────────────────────────────┼─────────────────────────┤
+  │ 2   │ generate_cot.py                             │ Stage 2: Gemini API CoT generation         │ Jumpbox                 │
+  ├─────┼─────────────────────────────────────────────┼────────────────────────────────────────────┼─────────────────────────┤
+  │ 3   │ build_sft_dataset.py                        │ Stage 3: Assemble ArrayRecord SFT dataset  │ Jumpbox                 │
+  ├─────┼─────────────────────────────────────────────┼────────────────────────────────────────────┼─────────────────────────┤
+  │ 4   │ train_sft_distillation.sh                   │ Stage 4: SFT training on distillation data │ TPU v4-32 (all 4 hosts) │
+  └─────┴─────────────────────────────────────────────┴────────────────────────────────────────────┴─────────────────────────┘
+  Execution sequence (from jumpbox):
+  Stage 1: ./qwen_speech_exp/inference/run_batch_inference.sh
+  Stage 2: python3 qwen_speech_exp/distillation/generate_cot.py
+  Stage 3: python3 qwen_speech_exp/distillation/build_sft_dataset.py
+  Stage 4: multihost_runner.py ... --COMMAND="... bash qwen_speech_exp/training/train_sft_distillation.sh"
+
+  Each stage reads the output of the previous stage. The plan recommends testing on a small subset (10 samples) first before running the
+  full pipeline.

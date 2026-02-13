@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "${SCRIPT_DIR}/env_vars.sh"
+source "${SCRIPT_DIR}/../env_vars.sh"
 
 # Mount GCS data via gcsfuse
 bash "${PROJECT_ROOT}/tools/setup/setup_gcsfuse.sh" \

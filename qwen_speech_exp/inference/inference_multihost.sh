@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "${SCRIPT_DIR}/env_vars.sh"
+source "${SCRIPT_DIR}/../env_vars.sh"
 
 # Defaults
 MODE="text"
