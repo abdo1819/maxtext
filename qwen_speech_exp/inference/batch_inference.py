@@ -178,12 +178,10 @@ def build_prompt_tokens(hf_tokenizer, num_audio_tokens):
   Returns (token_array, true_length) as int32 numpy array.
   """
   prefix_text = (
-      "<|im_start|>system\n"
-      "You are a helpful assistant.<|im_end|>\n"
       "<|im_start|>user\n"
   )
   suffix_text = (
-      "\nTranscribe this Arabic audio accurately.<|im_end|>\n"
+      "\nTranscribe the Arabic audio into text.<|im_end|>\n"
       "<|im_start|>assistant\n"
   )
 
