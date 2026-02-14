@@ -942,14 +942,27 @@ def get_hf_model(model_id: str, token: str):
 
     model_class = Qwen3OmniMoeForConditionalGeneration
   elif model_id in ["Qwen/Qwen3-ASR-1.7B"]:
-    from transformers import AutoModelForSpeechSeq2Seq  # pylint: disable=import-outside-toplevel
+    import sys  # pylint: disable=import-outside-toplevel
 
-    try:
-      hf_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, token=token, trust_remote_code=True)
-    except Exception:
-      from transformers import AutoModel  # pylint: disable=import-outside-toplevel
+    # Register the Qwen3-ASR model classes from the local repo clone since
+    # transformers doesn't have built-in support for qwen3_asr yet.
+    qwen_asr_backend = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "qwen_asr_exp", "Qwen3-ASR", "qwen_asr", "core", "transformers_backend"
+    )
+    qwen_asr_backend = os.path.abspath(qwen_asr_backend)
+    if qwen_asr_backend not in sys.path:
+      sys.path.insert(0, qwen_asr_backend)
 
-      hf_model = AutoModel.from_pretrained(model_id, token=token, trust_remote_code=True)
+    from configuration_qwen3_asr import Qwen3ASRConfig  # pylint: disable=import-outside-toplevel
+    from modeling_qwen3_asr import Qwen3ASRForConditionalGeneration  # pylint: disable=import-outside-toplevel
+    from transformers import AutoConfig  # pylint: disable=import-outside-toplevel
+
+    # Register so from_pretrained can resolve the model type
+    AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
+    Qwen3ASRForConditionalGeneration.register_for_auto_class("AutoModel")
+
+    config = Qwen3ASRConfig.from_pretrained(model_id, token=token)
+    hf_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, token=token, config=config)
     return hf_model
   else:
     model_class = AutoModelForCausalLM
