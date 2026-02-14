@@ -81,6 +81,7 @@ HF_IDS = {
     "deepseek3-671b": "deepseek-ai/DeepSeek-V3",
     "gpt-oss-20b": "openai/gpt-oss-20b",
     "gpt-oss-120b": "openai/gpt-oss-120b",
+    "qwen3-asr-1.7b": "Qwen/Qwen3-ASR-1.7B",
     "qwen3-omni-30b-a3b": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
     "mixtral-8x7b": "mistralai/Mixtral-8x7B-Instruct-v0.1",
     "mixtral-8x22b": "mistralai/Mixtral-8x22B-Instruct-v0.1",
@@ -940,6 +941,16 @@ def get_hf_model(model_id: str, token: str):
     from transformers import Qwen3OmniMoeForConditionalGeneration  # pylint: disable=import-outside-toplevel
 
     model_class = Qwen3OmniMoeForConditionalGeneration
+  elif model_id in ["Qwen/Qwen3-ASR-1.7B"]:
+    from transformers import AutoModelForSpeechSeq2Seq  # pylint: disable=import-outside-toplevel
+
+    try:
+      hf_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, token=token, trust_remote_code=True)
+    except Exception:
+      from transformers import AutoModel  # pylint: disable=import-outside-toplevel
+
+      hf_model = AutoModel.from_pretrained(model_id, token=token, trust_remote_code=True)
+    return hf_model
   else:
     model_class = AutoModelForCausalLM
 

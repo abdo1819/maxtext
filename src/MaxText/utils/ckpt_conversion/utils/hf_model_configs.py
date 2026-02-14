@@ -680,6 +680,65 @@ gpt_oss_120b_dict = {
 gpt_oss_120b_config = transformers.GptOssConfig(**gpt_oss_120b_dict)
 
 
+# Qwen3-ASR-1.7B uses a thinker_config structure similar to Qwen3-Omni but without vision.
+# No dedicated transformers config class exists, so we use a dict wrapper.
+qwen3_asr_1_7b_dict = {
+    "architectures": ["Qwen3ASRForConditionalGeneration"],
+    "model_type": "qwen3_asr",
+    "thinker_config": {
+        "text_config": {
+            "hidden_size": 2048,
+            "intermediate_size": 6144,
+            "num_hidden_layers": 28,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 8,
+            "head_dim": 128,
+            "hidden_act": "silu",
+            "max_position_embeddings": 65536,
+            "rms_norm_eps": 1e-06,
+            "rope_theta": 1000000.0,
+            "vocab_size": 151936,
+            "tie_word_embeddings": True,
+        },
+        "audio_config": {
+            "d_model": 1024,
+            "encoder_layers": 24,
+            "encoder_attention_heads": 16,
+            "encoder_ffn_dim": 4096,
+            "num_mel_bins": 128,
+            "downsample_hidden_size": 480,
+            "output_dim": 2048,
+            "n_window": 50,
+            "n_window_infer": 800,
+            "conv_chunksize": 500,
+        },
+    },
+    "torch_dtype": "bfloat16",
+}
+
+
+class _DictConfig:
+  """Minimal wrapper around a dict to provide to_dict() for HF compatibility."""
+
+  def __init__(self, d):
+    self._d = d
+
+  def to_dict(self):
+    return dict(self._d)
+
+  def __getitem__(self, key):
+    return self._d[key]
+
+  def __contains__(self, key):
+    return key in self._d
+
+  def get(self, key, default=None):
+    return self._d.get(key, default)
+
+
+qwen3_asr_1_7b_config = _DictConfig(qwen3_asr_1_7b_dict)
+
+
 qwen3_omni_30b_a3b_config = transformers.Qwen3OmniMoeConfig(
     # TODO(hengtaoguo): Pure-text Omni model, need to fill in visual/audio/code2wav parts
     architectures=["Qwen3OmniMoeForConditionalGeneration"],
@@ -788,6 +847,7 @@ HF_MODEL_CONFIGS = {
     "deepseek3-671b": deepseek3_671b_config,
     "gpt-oss-20b": gpt_oss_20b_config,
     "gpt-oss-120b": gpt_oss_120b_config,
+    "qwen3-asr-1.7b": qwen3_asr_1_7b_config,
     "qwen3-omni-30b-a3b": qwen3_omni_30b_a3b_config,
     "mixtral-8x7b": mixtral_8x7b_config,
     "mixtral-8x22b": mixtral_8x22b_config,

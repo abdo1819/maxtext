@@ -162,10 +162,10 @@ class TransformerLinenPure(nn.Module):
         image_embeddings = vision_output
       bidirectional_mask = mm_processor.get_bidirectional_mask_vision(self.config, decoder_input_tokens)
 
-    if self.config.use_multimodal and encoder_audios is not None and self.audio_encoder is not None:
+    if self.config.use_audio and encoder_audios is not None and self.audio_encoder is not None:
       audio_embeddings = self.audio_encoder(input_audio=encoder_audios, deterministic=not enable_dropout)
 
-    # Create audio mask for placeholder tokens (qwen3-omni models)
+    # Create audio mask for placeholder tokens (qwen3-omni / qwen3-asr models)
     audio_masks = None
     if audio_embeddings is not None:
       audio_masks = mm_processor.get_bidirectional_mask_audio(self.config, decoder_input_tokens)
@@ -468,10 +468,10 @@ class Transformer(nnx.Module):
       bidirectional_mask = mm_processor.get_bidirectional_mask_vision(self.config, decoder_input_tokens)
 
     audio_embeddings = None
-    if self.config.use_multimodal and encoder_audios is not None and self.audio_encoder is not None:
+    if self.config.use_audio and encoder_audios is not None and self.audio_encoder is not None:
       audio_embeddings = self.audio_encoder(input_audio=encoder_audios, deterministic=not enable_dropout)
 
-    # Create audio mask for placeholder tokens (qwen3-omni models)
+    # Create audio mask for placeholder tokens (qwen3-omni / qwen3-asr models)
     audio_masks = None
     if audio_embeddings is not None:
       audio_masks = mm_processor.get_bidirectional_mask_audio(self.config, decoder_input_tokens)

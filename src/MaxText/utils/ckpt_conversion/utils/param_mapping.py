@@ -1915,6 +1915,188 @@ def MIXTRAL_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=Fals
   return hooks
 
 
+def QWEN3_ASR_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
+  """Returns mapping from MaxText to HuggingFace Qwen3-ASR weight paths.
+
+  Combines text decoder mapping (with thinker. prefix) and audio encoder mapping.
+  No vision mapping since Qwen3-ASR is audio-only.
+
+  Args:
+    config (dict): Model configuration dictionary containing thinker_config with
+      text_config and audio_config sub-dicts.
+    maxtext_config: MaxText configuration object.
+    scan_layers (bool, optional): Whether the model uses scanned layers. Defaults to False.
+
+  Returns:
+    dict: Combined mapping from text and audio modalities.
+  """
+  mapping = {}
+
+  # Text mapping with "thinker." prefix, reusing QWEN3 dense mapping function
+  n_layers_text = config["thinker_config"]["text_config"]["num_hidden_layers"]
+  text_mapping = QWEN3_MAXTEXT_TO_HF_PARAM_MAPPING(
+      config={"num_hidden_layers": n_layers_text, "num_experts": 0},
+      maxtext_config=maxtext_config,
+      scan_layers=scan_layers,
+  )
+
+  # Add "thinker." prefix to text mapping values
+  def add_prefix_recursive(value):
+    if isinstance(value, list):
+      return [add_prefix_recursive(v) for v in value]
+    else:
+      return f"thinker.{value}"
+
+  for key, value in text_mapping.items():
+    text_mapping[key] = add_prefix_recursive(value)
+  mapping.update(text_mapping)
+
+  # Audio mapping (same structure as qwen3-omni audio)
+  audio_config = config["thinker_config"]["audio_config"]
+  n_audio_layers = audio_config["encoder_layers"]
+
+  # Audio conv layers (3 Conv2D layers for downsampling)
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d1-kernel"] = "thinker.audio_tower.conv2d1.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d1-bias"] = "thinker.audio_tower.conv2d1.bias"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d2-kernel"] = "thinker.audio_tower.conv2d2.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d2-bias"] = "thinker.audio_tower.conv2d2.bias"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d3-kernel"] = "thinker.audio_tower.conv2d3.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d3-bias"] = "thinker.audio_tower.conv2d3.bias"
+
+  # Audio conv output projection
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv_out-kernel"] = "thinker.audio_tower.conv_out.weight"
+
+  # Audio encoder layers
+  for i in range(n_audio_layers):
+    prefix = f"params-audio_encoder-Qwen3OmniAudioEncoder_0-layers_{i}"
+    hf_prefix = f"thinker.audio_tower.layers.{i}"
+
+    # Layer norms
+    mapping[f"{prefix}-input_layer_norm-scale"] = f"{hf_prefix}.self_attn_layer_norm.weight"
+    mapping[f"{prefix}-input_layer_norm-bias"] = f"{hf_prefix}.self_attn_layer_norm.bias"
+    mapping[f"{prefix}-post_attention_layer_norm-scale"] = f"{hf_prefix}.final_layer_norm.weight"
+    mapping[f"{prefix}-post_attention_layer_norm-bias"] = f"{hf_prefix}.final_layer_norm.bias"
+
+    # Attention (separate Q/K/V)
+    mapping[f"{prefix}-self_attention_audio-query-kernel"] = f"{hf_prefix}.self_attn.q_proj.weight"
+    mapping[f"{prefix}-self_attention_audio-query-bias"] = f"{hf_prefix}.self_attn.q_proj.bias"
+    mapping[f"{prefix}-self_attention_audio-key-kernel"] = f"{hf_prefix}.self_attn.k_proj.weight"
+    mapping[f"{prefix}-self_attention_audio-key-bias"] = f"{hf_prefix}.self_attn.k_proj.bias"
+    mapping[f"{prefix}-self_attention_audio-value-kernel"] = f"{hf_prefix}.self_attn.v_proj.weight"
+    mapping[f"{prefix}-self_attention_audio-value-bias"] = f"{hf_prefix}.self_attn.v_proj.bias"
+    mapping[f"{prefix}-self_attention_audio-out-kernel"] = f"{hf_prefix}.self_attn.out_proj.weight"
+    mapping[f"{prefix}-self_attention_audio-out-bias"] = f"{hf_prefix}.self_attn.out_proj.bias"
+
+    # MLP (AudioMLP has 2 linear layers: fc1 and fc2)
+    mapping[f"{prefix}-AudioMLP-wi-kernel"] = f"{hf_prefix}.fc1.weight"
+    mapping[f"{prefix}-AudioMLP-wi-bias"] = f"{hf_prefix}.fc1.bias"
+    mapping[f"{prefix}-AudioMLP-wo-kernel"] = f"{hf_prefix}.fc2.weight"
+    mapping[f"{prefix}-AudioMLP-wo-bias"] = f"{hf_prefix}.fc2.bias"
+
+  # Audio post layer norm
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-layernorm_post-scale"] = "thinker.audio_tower.ln_post.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-layernorm_post-bias"] = "thinker.audio_tower.ln_post.bias"
+
+  # Audio projector (2 linear layers)
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj1-kernel"] = "thinker.audio_tower.proj1.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj1-bias"] = "thinker.audio_tower.proj1.bias"
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj2-kernel"] = "thinker.audio_tower.proj2.weight"
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj2-bias"] = "thinker.audio_tower.proj2.bias"
+
+  return mapping
+
+
+def QWEN3_ASR_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False, saving_to_hf=False):
+  """Creates parameter transformation functions for Qwen3-ASR.
+
+  Combines text decoder hooks and audio encoder hooks.
+
+  Args:
+    config (dict): Model configuration dictionary.
+    maxtext_config: MaxText configuration object.
+    scan_layers (bool, optional): Whether the model uses scanned layers. Defaults to False.
+    saving_to_hf (bool, optional): Conversion direction. Defaults to False.
+
+  Returns:
+    dict: A dictionary mapping MaxText parameter names to transformation functions.
+  """
+  mapping = {}
+
+  # Text hooks, reusing QWEN3 dense hook function
+  n_layers_text = config["thinker_config"]["text_config"]["num_hidden_layers"]
+  text_hooks = QWEN3_MAXTEXT_TO_HF_PARAM_HOOK_FN(
+      config={"num_hidden_layers": n_layers_text, "num_experts": 0},
+      maxtext_config=maxtext_config,
+      scan_layers=scan_layers,
+      saving_to_hf=saving_to_hf,
+  )
+  mapping.update(text_hooks)
+
+  # Audio hooks
+  audio_config = config["thinker_config"]["audio_config"]
+  n_audio_layers = audio_config["encoder_layers"]
+  hidden_size_audio = audio_config["d_model"]
+
+  def reshape_kernel_audio(input_tensor, target_shape):
+    if saving_to_hf:
+      flipped_target_shape = np.flip(np.array(target_shape))
+      return input_tensor.reshape(flipped_target_shape).T
+    else:
+      return input_tensor.T.reshape(target_shape)
+
+  def reshape_conv2d_audio(input_tensor, target_shape):
+    if saving_to_hf:
+      return input_tensor.transpose(3, 2, 0, 1)
+    else:
+      return input_tensor.transpose(2, 3, 1, 0)
+
+  def reshape_audio_attn_qkv(input_tensor, target_shape):
+    if saving_to_hf:
+      return input_tensor.reshape(hidden_size_audio, hidden_size_audio).T
+    else:
+      return input_tensor.T.reshape(target_shape)
+
+  def reshape_audio_attn_out(input_tensor, target_shape):
+    if saving_to_hf:
+      return input_tensor.reshape(hidden_size_audio, hidden_size_audio).T
+    else:
+      return input_tensor.T.reshape(target_shape)
+
+  def reshape_audio_attn_qkv_bias(input_tensor, target_shape):
+    if saving_to_hf:
+      return input_tensor.reshape(hidden_size_audio)
+    else:
+      return input_tensor.reshape(target_shape)
+
+  # Audio conv layers
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d1-kernel"] = reshape_conv2d_audio
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d2-kernel"] = reshape_conv2d_audio
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv2d3-kernel"] = reshape_conv2d_audio
+
+  # Audio conv output projection
+  mapping["params-audio_encoder-Qwen3OmniAudioEncoder_0-conv_out-kernel"] = reshape_kernel_audio
+
+  # Audio encoder layers
+  for i in range(n_audio_layers):
+    prefix = f"params-audio_encoder-Qwen3OmniAudioEncoder_0-layers_{i}"
+
+    mapping[f"{prefix}-self_attention_audio-query-kernel"] = reshape_audio_attn_qkv
+    mapping[f"{prefix}-self_attention_audio-query-bias"] = reshape_audio_attn_qkv_bias
+    mapping[f"{prefix}-self_attention_audio-key-kernel"] = reshape_audio_attn_qkv
+    mapping[f"{prefix}-self_attention_audio-key-bias"] = reshape_audio_attn_qkv_bias
+    mapping[f"{prefix}-self_attention_audio-value-kernel"] = reshape_audio_attn_qkv
+    mapping[f"{prefix}-self_attention_audio-value-bias"] = reshape_audio_attn_qkv_bias
+    mapping[f"{prefix}-self_attention_audio-out-kernel"] = reshape_audio_attn_out
+    mapping[f"{prefix}-AudioMLP-wi-kernel"] = reshape_kernel_audio
+    mapping[f"{prefix}-AudioMLP-wo-kernel"] = reshape_kernel_audio
+
+  # Audio projector
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj1-kernel"] = reshape_kernel_audio
+  mapping["params-audio_encoder-Qwen3OmniAudioProjector_0-proj2-kernel"] = reshape_kernel_audio
+
+  return mapping
+
+
 # {maxtext model name: {maxtext weight name: hf weight name}}
 PARAM_MAPPING = {
     "gemma2-2b": GEMMA2_MAXTEXT_TO_HF_PARAM_MAPPING,
@@ -1938,6 +2120,7 @@ PARAM_MAPPING = {
     "deepseek3-671b": DEEPSEEK_MAXTEXT_TO_HF_PARAM_MAPPING,
     "gpt-oss-20b": GPT_OSS_MAXTEXT_TO_HF_PARAM_MAPPING,
     "gpt-oss-120b": GPT_OSS_MAXTEXT_TO_HF_PARAM_MAPPING,
+    "qwen3-asr-1.7b": QWEN3_ASR_MAXTEXT_TO_HF_PARAM_MAPPING,
     "qwen3-omni-30b-a3b": QWEN3_OMNI_MOE_MAXTEXT_TO_HF_PARAM_MAPPING,
     "mixtral-8x7b": MIXTRAL_MAXTEXT_TO_HF_PARAM_MAPPING,
     "mixtral-8x22b": MIXTRAL_MAXTEXT_TO_HF_PARAM_MAPPING,
@@ -1966,6 +2149,7 @@ HOOK_FNS = {
     "deepseek3-671b": DEEPSEEK_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "gpt-oss-20b": GPT_OSS_TO_HF_PARAM_HOOK_FN,
     "gpt-oss-120b": GPT_OSS_TO_HF_PARAM_HOOK_FN,
+    "qwen3-asr-1.7b": QWEN3_ASR_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "qwen3-omni-30b-a3b": QWEN3_OMNI_MOE_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "mixtral-8x7b": MIXTRAL_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "mixtral-8x22b": MIXTRAL_MAXTEXT_TO_HF_PARAM_HOOK_FN,

@@ -39,7 +39,7 @@ def preprocess_mm_data(config):
 
     images = [mm_utils.load_image_from_path(p) for p in config.image_path.split(",")]
     processor_outputs = preprocess_mm_data_llama4(images)
-  elif config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
+  elif config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"] or config.model_name.startswith("qwen3-asr"):
     from maxtext.multimodal.processor_qwen3_omni import preprocess_mm_data_qwen3_omni  # pylint: disable=import-outside-toplevel
 
     processor_outputs = preprocess_mm_data_qwen3_omni(config)
@@ -147,7 +147,7 @@ def get_dummy_audio_shape_for_init(config, batch_size=None):
     Returns empty tuple if audio is not configured for the model
   """
   audio_shape = ()
-  if config.model_name.startswith("qwen3-omni"):
+  if config.model_name.startswith("qwen3-omni") or config.model_name.startswith("qwen3-asr"):
     from maxtext.multimodal.processor_qwen3_omni import get_dummy_audio_shape_for_init_qwen3_omni  # pylint: disable=import-outside-toplevel
 
     audio_shape = get_dummy_audio_shape_for_init_qwen3_omni(config, batch_size=batch_size)
@@ -185,4 +185,7 @@ def get_bidirectional_mask_audio(config, decoder_input_tokens):
 
     # Create bidirectional_mask for audio token merging
     bidirectional_mask_audio = decoder_input_tokens == QWEN3_OMNI_AUDIO_TOKEN
+  elif config.model_name.startswith("qwen3-asr"):
+    QWEN3_ASR_AUDIO_TOKEN = 151676  # <|AUDIO|> token for Qwen3-ASR
+    bidirectional_mask_audio = decoder_input_tokens == QWEN3_ASR_AUDIO_TOKEN
   return bidirectional_mask_audio

@@ -94,7 +94,7 @@ class AudioEncoder(nnx.Module):
 
   def _setup_audio_encoder_layers(self):
     """Setup audio encoder layers specific to the model, instantiate NNX modules."""
-    if self.config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test"]:
+    if self.config.model_name in ["qwen3-omni-30b-a3b", "qwen3-omni-test", "qwen3-asr-1.7b"]:
       from MaxText.layers import qwen3  # pylint: disable=import-outside-toplevel
 
       encoder_name = "Qwen3OmniAudioEncoder_0"
