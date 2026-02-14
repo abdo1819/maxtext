@@ -944,10 +944,10 @@ def get_hf_model(model_id: str, token: str):
   elif model_id in ["Qwen/Qwen3-ASR-1.7B"]:
     import sys  # pylint: disable=import-outside-toplevel
 
-    # Register the Qwen3-ASR model classes from the local repo clone since
+    # Register the Qwen3-ASR model classes from qwen_asr_exp/hf_model/ since
     # transformers doesn't have built-in support for qwen3_asr yet.
     qwen_asr_backend = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "..", "qwen_asr_exp", "Qwen3-ASR", "qwen_asr", "core", "transformers_backend"
+        os.path.dirname(__file__), "..", "..", "..", "..", "qwen_asr_exp", "hf_model"
     )
     qwen_asr_backend = os.path.abspath(qwen_asr_backend)
     if qwen_asr_backend not in sys.path:
