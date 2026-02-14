@@ -584,18 +584,28 @@ def main(args: Sequence[str], test_args: Sequence[str]) -> None:
   hf_loader = None
 
   # Define the appropriate tensor getter based on mode
-  # Models not yet in transformers need trust_remote_code to load their config
-  trust_remote = model_id in ("Qwen/Qwen3-ASR-1.7B",)
+  # Models not yet in transformers: load config.json as a plain dict
+  _MODELS_WITHOUT_AUTO_CONFIG = ("Qwen/Qwen3-ASR-1.7B",)
+
+  def _load_hf_config(mid, token):
+    if mid in _MODELS_WITHOUT_AUTO_CONFIG:
+      from huggingface_hub import hf_hub_download  # pylint: disable=import-outside-toplevel
+      config_path = hf_hub_download(mid, "config.json", token=token)
+      with open(config_path, "r") as f:
+        config_dict = json.load(f)
+      from MaxText.utils.ckpt_conversion.utils.hf_model_configs import _DictConfig  # pylint: disable=import-outside-toplevel
+      return _DictConfig(config_dict)
+    return AutoConfig.from_pretrained(mid, token=token)
 
   if use_lazy_load:
     max_logging.log(f"Lazy loading ENABLED. Initializing LazyHFLoader for: {model_id}...")
     hf_loader = LazyHFLoader(model_id, hf_token)
-    hf_config_obj = AutoConfig.from_pretrained(model_id, token=hf_token, trust_remote_code=trust_remote)
+    hf_config_obj = _load_hf_config(model_id, hf_token)
     print_ram_usage("After LazyLoader init")
     tensor_getter = hf_loader.get_tensor
   else:
     max_logging.log(f"Lazy loading DISABLED. Loading full HuggingFace model: {model_id}...")
-    hf_config_obj = AutoConfig.from_pretrained(model_id, token=hf_token, trust_remote_code=trust_remote)
+    hf_config_obj = _load_hf_config(model_id, hf_token)
     hf_model = get_hf_model(model_id, token=hf_token)
     hf_state_dict_numpy = hf_model.state_dict()
     # Convert all to numpy immediately in eager mode
