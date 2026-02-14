@@ -522,13 +522,9 @@ def main(argv):
           if not samples_exhausted:
             try_fill_slot(slot)
 
-        # Every 10 generate steps, try to fill one additional empty slot
-        # to gradually ramp up batch utilization during generation
-        if step % 10 == 9 and not samples_exhausted:
-          for slot in slots:
-            if not slot.active:
-              try_fill_slot(slot)
-              break  # Fill one slot per interval
+        # Note: proactive ramp-up filling was removed because each prefill
+        # takes ~40s, blocking generation for all active slots. Slots are
+        # only filled when they naturally complete (newly_done above).
 
         # If no slots are active, break the generate loop
         if not any(s.active for s in slots):
