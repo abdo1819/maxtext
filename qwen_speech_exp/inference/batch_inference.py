@@ -5,6 +5,11 @@ to minimize JIT recompilation. Audio is padded to fixed bucket sizes so that
 prefill compiles once per bucket (~8 times) instead of once per unique audio
 length (~200+ times).
 
+Slots are filled incrementally: a small initial batch (8 slots) is filled
+first to start generation quickly, then remaining slots are filled between
+generate steps. This avoids waiting ~45 minutes to fill all 64 slots before
+any output is produced.
+
 All 4 TPU hosts participate in every inference step (model-parallel).
 Only host 0 writes output.
 
@@ -462,24 +467,40 @@ def main(argv):
     slot.generated_tokens = []
 
   # === Main continuous batching loop ===
+  # Fill a small initial batch, then interleave generation with filling.
+  # Each prefill takes ~40s (full model forward pass across 16 chips),
+  # so filling all 64 slots upfront would waste ~45 minutes before
+  # any generation starts. Instead, fill INITIAL_FILL slots, start
+  # generating, and fill remaining empty slots between generate steps.
+  INITIAL_FILL = min(8, total_slots)
   try:
-    while True:
-      # Phase 1: Fill all empty slots with new samples
-      for slot in slots:
-        if slot.active:
-          continue
-        if not try_fill_slot(slot):
-          break  # No more samples
-
-      # Check if any slots are active
-      active_slots = [s for s in slots if s.active]
-      if not active_slots:
+    # Phase 1: Fill initial batch of slots
+    filled_count = 0
+    for slot in slots:
+      if filled_count >= INITIAL_FILL:
         break
+      if not try_fill_slot(slot):
+        break
+      filled_count += 1
+
+    max_logging.log(f"Initial fill: {filled_count}/{total_slots} slots filled, starting generation")
+
+    # Phase 2: Interleaved generate + fill loop
+    while True:
+      active_slots = [s for s in slots if s.active]
+      if not active_slots and samples_exhausted:
+        break
+      if not active_slots:
+        # No active slots but samples remain — fill one and retry
+        for slot in slots:
+          if not slot.active and try_fill_slot(slot):
+            break
+        continue
 
       active_count = len(active_slots)
-      max_logging.log(f"Generate phase: {active_count} active slots")
+      empty_count = sum(1 for s in slots if not s.active)
+      max_logging.log(f"Generate phase: {active_count} active, {empty_count} empty slots")
 
-      # Phase 2: Generate one step at a time with continuous refilling
       for step in range(max_generate_steps):
         rng, rng_gen = jax.random.split(rng)
         decode_state, sampled_tokens = engine.generate(params, decode_state, rng=rng_gen)
@@ -489,7 +510,6 @@ def main(argv):
         for slot in slots:
           if not slot.active:
             continue
-          # Generate returns results indexed by slot
           token_id = sampled_tokens.get_result_at_slot(slot.slot_idx).tokens.item()
           slot.generated_tokens.append(token_id)
 
@@ -501,6 +521,14 @@ def main(argv):
           finish_slot(slot)
           if not samples_exhausted:
             try_fill_slot(slot)
+
+        # Every 10 generate steps, try to fill one additional empty slot
+        # to gradually ramp up batch utilization during generation
+        if step % 10 == 9 and not samples_exhausted:
+          for slot in slots:
+            if not slot.active:
+              try_fill_slot(slot)
+              break  # Fill one slot per interval
 
         # If no slots are active, break the generate loop
         if not any(s.active for s in slots):
