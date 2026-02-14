@@ -40,7 +40,7 @@ from transformers.utils import auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import TransformersKwargs, check_model_inputs
 
-from .configuration_qwen3_asr import (
+from configuration_qwen3_asr import (
     Qwen3ASRAudioEncoderConfig,
     Qwen3ASRConfig,
     Qwen3ASRThinkerConfig,
