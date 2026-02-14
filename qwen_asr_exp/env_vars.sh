@@ -20,6 +20,6 @@ fi
 
 # --- 4. COMMON ARGS ---
 export TOKENIZER_PATH="${PROJECT_ROOT}/src/maxtext/assets/tokenizers/qwen3-tokenizer"
-export CONFIG_FILE="${PROJECT_ROOT}/src/maxtext/configs/models/qwen3-asr-1.7b.yml"
+export CONFIG_FILE="${PROJECT_ROOT}/src/maxtext/configs/base.yml"
 
 export TPU_NAME="tpu-v4-32-node"
