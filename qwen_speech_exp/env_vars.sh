@@ -28,4 +28,4 @@ export TOKENIZER_PATH="${PROJECT_ROOT}/src/maxtext/assets/tokenizers/qwen3-token
 export CONFIG_FILE="${PROJECT_ROOT}/src/maxtext/configs/models/qwen3-omni-30b-a3b.yml"
 
 
-export TPU_NAME="tpu-v4-32-node"
+export TPU_NAME="qr-v4-32"

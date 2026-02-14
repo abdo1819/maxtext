@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../env_vars.sh"
 
 python3 tools/orchestration/multihost_runner.py \
-    --TPU_PREFIX=tpu-v4-32-node \
+    --TPU_PREFIX=qr-v4-32 \
     --PROJECT=arabic-asr-level2thinkg \
     --ZONE=us-central2-b \
     --INTERNAL_IP=true \
