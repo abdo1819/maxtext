@@ -52,11 +52,27 @@ def main():
   print("\n[1/4] Loading checkpoint from source...")
   start = time.time()
 
-  ckptr = ocp.PyTreeCheckpointer(
+  cpu_sharding = jax.sharding.SingleDeviceSharding(jax.devices("cpu")[0])
+
+  handler = ocp.PyTreeCheckpointHandler(
       use_ocdbt=args.use_ocdbt,
       use_zarr3=args.use_zarr3,
   )
-  state = ckptr.restore(epath.Path(source_items_path))
+
+  # Get metadata to build restore args with CPU sharding
+  item_path = epath.Path(source_items_path)
+  metadata = handler.metadata(item_path)
+
+  def _make_restore_args(meta):
+    if hasattr(meta, "shape"):
+      return ocp.ArrayRestoreArgs(sharding=cpu_sharding)
+    return meta
+
+  restore_args = jax.tree_util.tree_map(_make_restore_args, metadata)
+  state = handler.restore(item_path, args=ocp.args.PyTreeRestore(
+      item=restore_args,
+      restore_args=restore_args,
+  ))
   elapsed = time.time() - start
   print(f"  Loaded in {elapsed / 60:.1f} min")
 
