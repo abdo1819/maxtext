@@ -1101,7 +1101,7 @@ class Attention(nnx.Module):
     key = checkpoint_name(key, "key_proj")
     value = checkpoint_name(value, "value_proj")
 
-    assert not self.config.quantize_kvcache or self.kv_quant
+    assert not self.config.quantize_kvcache or self.kv_quant or self.is_vision
 
     if self.config.attention == "paged" and model_mode != MODEL_MODE_TRAIN:
       unnormalized_out, _, exp_sum = self.paged_attention_op(
