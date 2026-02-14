@@ -79,5 +79,4 @@ python3 -m maxtext.decode "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
     use_audio=${USE_AUDIO} \
     prompt="${PROMPT}" \
     skip_jax_distributed_system=false \
-    autoregressive_decode_assert="" \
     ${EXTRA_ARGS}
