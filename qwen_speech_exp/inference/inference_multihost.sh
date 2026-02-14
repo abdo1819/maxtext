@@ -52,10 +52,8 @@ case $MODE in
 esac
 
 # Multi-host inference on v4-32 (16 chips) with bf16 checkpoint.
-# With bf16, model fits on 4 chips (one host), so we split:
-#   - ici_expert_parallelism=4  (experts on 4 chips, less all-to-all)
-#   - ici_data_parallelism=4    (4 independent data-parallel groups)
-# This reduces expert routing communication from 16-chip to 4-chip groups.
+# With bf16 checkpoint: faster load, less HBM usage, less chip-to-chip transfer.
+# ep=16 across all chips (MoE prefill batch=1 prevents ici_data_parallelism>1).
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE'
 
 python3 -m maxtext.decode "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
@@ -67,8 +65,7 @@ python3 -m maxtext.decode "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
     max_target_length=${MAX_TARGET} \
     per_device_batch_size=1 \
     ici_fsdp_parallelism=1 \
-    ici_data_parallelism=4 \
-    ici_expert_parallelism=4 \
+    ici_expert_parallelism=16 \
     ici_tensor_parallelism=1 \
     scan_layers=false \
     weight_dtype=bfloat16 \

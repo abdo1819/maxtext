@@ -31,8 +31,7 @@ python3 qwen_speech_exp/inference/batch_inference.py \
     max_target_length=512 \
     per_device_batch_size=4 \
     ici_fsdp_parallelism=1 \
-    ici_data_parallelism=4 \
-    ici_expert_parallelism=4 \
+    ici_expert_parallelism=16 \
     ici_tensor_parallelism=1 \
     scan_layers=false \
     weight_dtype=bfloat16 \
