@@ -11,7 +11,7 @@ export BASE_OUTPUT_DIR="gs://arabic-asr-dataset/checkpoints"
 export CHECKPOINT_PATH="${BASE_OUTPUT_DIR}/${MODEL_NAME}"
 
 # --- 3. HUGGINGFACE CONFIG ---
-export HF_HOME='/mnt/data/hf_cache'
+export HF_HOME="${HOME}/.cache/huggingface"
 export HF_HUB_CACHE="${HF_HOME}/hub"
 export HF_DATASETS_CACHE="${HF_HOME}/datasets"
 if [ -z "$HF_TOKEN" ]; then
