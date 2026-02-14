@@ -947,7 +947,7 @@ def get_hf_model(model_id: str, token: str):
     # Register the Qwen3-ASR model classes from qwen_asr_exp/hf_model/ since
     # transformers doesn't have built-in support for qwen3_asr yet.
     qwen_asr_backend = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "..", "qwen_asr_exp", "hf_model"
+        os.path.dirname(__file__), "..", "..", "..", "..", "..", "qwen_asr_exp", "hf_model"
     )
     qwen_asr_backend = os.path.abspath(qwen_asr_backend)
     if qwen_asr_backend not in sys.path:
