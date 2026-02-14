@@ -65,7 +65,7 @@ esac
 # Key differences from inference_multihost.sh:
 #   - skip_jax_distributed_system=true (no multi-host coordination)
 #   - ici_expert_parallelism=4 (single host, 4 chips)
-python3 -m maxtext.decode "${CONFIG_FILE}" \
+python3 -m maxtext.decode "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
     model_name="${MODEL_NAME}" \
     tokenizer_path="${TOKENIZER_PATH}" \
     tokenizer_type=huggingface \

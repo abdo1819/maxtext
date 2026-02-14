@@ -58,7 +58,7 @@ esac
 # This reduces expert routing communication from 16-chip to 4-chip groups.
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE'
 
-python3 -m maxtext.decode "${CONFIG_FILE}" \
+python3 -m maxtext.decode "${PROJECT_ROOT}/src/maxtext/configs/base.yml" \
     model_name="${MODEL_NAME}" \
     tokenizer_path="${TOKENIZER_PATH}" \
     tokenizer_type=huggingface \
