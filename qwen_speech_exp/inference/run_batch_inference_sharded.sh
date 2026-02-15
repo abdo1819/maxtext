@@ -28,7 +28,7 @@ git pull && \
 bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse && \
 bash preflight.sh 2>/dev/null || true && \
 mkdir -p /tmp/distillation && \
-rm -f /tmp/tpu-env && \
+sudo rm -f /tmp/tpu-env && \
 curl -s 'http://metadata.google.internal/computeMetadata/v1/instance/attributes/tpu-env' -H 'Metadata-Flavor: Google' > /tmp/tpu-env && \
 WORKER_ID=\$(grep '^WORKER_ID' /tmp/tpu-env | cut -d \"'\" -f 2) && \
 echo \"Worker ID: \$WORKER_ID\" && \

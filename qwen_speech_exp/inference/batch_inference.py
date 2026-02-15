@@ -56,8 +56,8 @@ NUM_SAMPLES = 5000
 SEED = 42
 
 # Sharding: each shard processes an interleaved subset of samples
-SHARD_INDEX = int(os.environ.get("SHARD_INDEX", "0"))
-NUM_SHARDS = int(os.environ.get("NUM_SHARDS", "1"))
+SHARD_INDEX = int(os.environ.get("SHARD_INDEX") or "0")
+NUM_SHARDS = int(os.environ.get("NUM_SHARDS") or "1")
 
 if NUM_SHARDS > 1:
   _output_name = f"inference_results_shard{SHARD_INDEX}.jsonl"
