@@ -1,17 +1,20 @@
 """Batch inference with bucketed audio padding and continuous batching.
 
-Uses per_device_batch_size=4 (64 total slots) with audio mel-frame bucketing
-to minimize JIT recompilation. Audio is padded to fixed bucket sizes so that
-prefill compiles once per bucket (~8 times) instead of once per unique audio
-length (~200+ times).
+Uses per_device_batch_size=4 with audio mel-frame bucketing to minimize JIT
+recompilation. Audio is padded to fixed bucket sizes so that prefill compiles
+once per bucket (~8 times) instead of once per unique audio length (~200+).
 
 Slots are filled incrementally: a small initial batch (8 slots) is filled
 first to start generation quickly, then remaining slots are filled between
-generate steps. This avoids waiting ~45 minutes to fill all 64 slots before
-any output is produced.
+generate steps.
 
-All 4 TPU hosts participate in every inference step (model-parallel).
-Only host 0 writes output.
+Supports sharded execution via environment variables:
+  SHARD_INDEX: 0-based shard index (default: 0)
+  NUM_SHARDS:  total number of shards (default: 1, no sharding)
+
+When NUM_SHARDS > 1, each shard processes an interleaved subset of the full
+sample list and writes to a separate output file (inference_results_shard{N}.jsonl).
+Use merge_shard_results.sh to combine outputs after all shards complete.
 
 Usage (via multihost_runner.py from jumpbox):
     python3 qwen_speech_exp/inference/batch_inference.py <config.yml> [key=value ...]
@@ -49,10 +52,22 @@ from maxtext.utils import max_logging
 # --- Configuration ---
 GCSFUSE_BASE = "/tmp/gcsfuse/grain_data_arrayrecord"
 OUTPUT_DIR = "/tmp/distillation"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "inference_results.jsonl")
-GCS_OUTPUT = "gs://arabic-asr-dataset/distillation/inference_results.jsonl"
 NUM_SAMPLES = 5000
 SEED = 42
+
+# Sharding: each shard processes an interleaved subset of samples
+SHARD_INDEX = int(os.environ.get("SHARD_INDEX", "0"))
+NUM_SHARDS = int(os.environ.get("NUM_SHARDS", "1"))
+
+if NUM_SHARDS > 1:
+  _output_name = f"inference_results_shard{SHARD_INDEX}.jsonl"
+else:
+  _output_name = "inference_results.jsonl"
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, _output_name)
+GCS_OUTPUT = f"gs://arabic-asr-dataset/distillation/{_output_name}"
+# Unsharded output path, used for resume migration
+GCS_OUTPUT_UNSHARDED = "gs://arabic-asr-dataset/distillation/inference_results.jsonl"
+OUTPUT_FILE_UNSHARDED = os.path.join(OUTPUT_DIR, "inference_results.jsonl")
 N_WINDOW = 50  # n_window_for_audio from model config
 GCS_UPLOAD_INTERVAL = 300  # Upload to GCS every 5 minutes
 
@@ -253,16 +268,27 @@ def main(argv):
   max_logging.log(
       f"Engine ready. max_prefill={max_prefill_length}, max_target={max_target_length}, "
       f"max_generate_steps={max_generate_steps}, total_slots={total_slots}, "
-      f"devices={jax.device_count()}, buckets={AUDIO_BUCKETS}"
+      f"devices={jax.device_count()}, buckets={AUDIO_BUCKETS}, "
+      f"shard={SHARD_INDEX}/{NUM_SHARDS}"
   )
 
   # --- Select samples (all hosts, deterministic) ---
   data_dir = os.path.join(GCSFUSE_BASE, "train")
   sample_list = select_samples(data_dir, NUM_SAMPLES, SEED)
-  max_logging.log(f"Selected {len(sample_list)} samples for inference")
+  max_logging.log(f"Selected {len(sample_list)} samples for inference (full set)")
 
-  # --- Resume (all hosts load completed_ids for sync) ---
+  # Partition samples across shards using interleaved slicing
+  if NUM_SHARDS > 1:
+    sample_list = sample_list[SHARD_INDEX::NUM_SHARDS]
+    max_logging.log(
+        f"Shard {SHARD_INDEX}/{NUM_SHARDS}: {len(sample_list)} samples for this shard"
+    )
+
+  # --- Resume (load completed_ids from shard file + old unsharded file) ---
   completed_ids = load_completed_ids(OUTPUT_FILE)
+  if NUM_SHARDS > 1:
+    # Also load IDs from the old unsharded file so previously completed samples are skipped
+    completed_ids |= load_completed_ids(OUTPUT_FILE_UNSHARDED)
   if is_host0:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     if completed_ids:
