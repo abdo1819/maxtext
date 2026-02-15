@@ -36,6 +36,7 @@ gsutil cp gs://arabic-asr-dataset/distillation/inference_results_shard\${WORKER_
 gsutil cp gs://arabic-asr-dataset/distillation/inference_results.jsonl /tmp/distillation/inference_results.jsonl 2>/dev/null || true && \
 export SHARD_INDEX=\$WORKER_ID && \
 export NUM_SHARDS=4 && \
+export TPU_CHIPS_PER_PROCESS_BOUNDS=2,2,1 && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
 python3 qwen_speech_exp/inference/batch_inference.py \
     src/maxtext/configs/base.yml \
