@@ -509,14 +509,8 @@ def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, chec
   """Memory-efficient training state setup for GRPO.
 
   Loads checkpoint params directly and creates optimizer state from them,
-  avoiding the double-allocation OOM of the standard setup_training_state.
-
-  With contiguous device allocation (inference on first N devices, training
-  on the rest), only hosts with training devices load from checkpoint.
-  Non-training hosts create zero-shard placeholder arrays so they can still
-  participate in collective JIT compilations (required by multi-host JAX)
-  without holding any actual parameter data or calling Orbax (which expects
-  every process to have addressable devices in the target sharding).
+  avoiding the double-allocation OOM of the standard setup_training_state
+  (which creates random params + loaded params on device simultaneously).
   """
   from flax.training import train_state
 
@@ -524,61 +518,27 @@ def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, chec
       model, tx, config, rng, mesh, is_training=True
   )
 
-  # Check if this host has any training devices (addressable shards).
-  # With contiguous allocation, some hosts may have no training devices.
-  local_training_devices = [d for d in mesh.devices.flat if d.process_index == jax.process_index()]
-  has_training_devices = len(local_training_devices) > 0
-  max_logging.log(
-      f"Process {jax.process_index()}: {len(local_training_devices)} local training devices "
-      f"(has_training_devices={has_training_devices})"
-  )
-
-  if has_training_devices:
-    with nn_partitioning.axis_rules(config.logical_axis_rules):
-      restored, raw_params = checkpointing.load_state_if_possible(
-          checkpoint_manager,
-          data_iterator,
-          config.load_parameters_path,
-          config.load_full_state_path,
-          config.checkpoint_storage_concurrent_gb,
-          unboxed_abstract_state,
-          config.enable_single_replica_ckpt_restoring,
-          config.dataset_type,
-          use_ocdbt=config.checkpoint_storage_use_ocdbt,
-          use_zarr3=config.checkpoint_storage_use_zarr3,
-          enable_orbax_v1=config.enable_orbax_v1,
-          checkpoint_conversion_fn=config.checkpoint_conversion_fn,
-          source_checkpoint_layout=config.source_checkpoint_layout,
-          expansion_factor_real_data=config.expansion_factor_real_data,
-      )
-  else:
-    max_logging.log("No local training devices — skipping checkpoint I/O")
-    restored, raw_params = None, None
-
-  # Barrier: training hosts may take tens of seconds to load from GCS.
-  # All hosts must reach the collective jax.jit(tx.init) at the same time.
-  jax.experimental.multihost_utils.sync_global_devices("grpo_checkpoint_loaded")
+  with nn_partitioning.axis_rules(config.logical_axis_rules):
+    restored, raw_params = checkpointing.load_state_if_possible(
+        checkpoint_manager,
+        data_iterator,
+        config.load_parameters_path,
+        config.load_full_state_path,
+        config.checkpoint_storage_concurrent_gb,
+        unboxed_abstract_state,
+        config.enable_single_replica_ckpt_restoring,
+        config.dataset_type,
+        use_ocdbt=config.checkpoint_storage_use_ocdbt,
+        use_zarr3=config.checkpoint_storage_use_zarr3,
+        enable_orbax_v1=config.enable_orbax_v1,
+        checkpoint_conversion_fn=config.checkpoint_conversion_fn,
+        source_checkpoint_layout=config.source_checkpoint_layout,
+        expansion_factor_real_data=config.expansion_factor_real_data,
+    )
 
   if restored:
     state = restored["items"]
-  elif raw_params is not None or not has_training_devices:
-    if raw_params is None:
-      # Non-training hosts: build zero-shard jax.Array objects whose global
-      # shape and sharding match the training mesh.  The data callback is
-      # never invoked because this host has no addressable devices in the
-      # mesh, so no host memory is allocated for parameter data.
-      max_logging.log("Building zero-shard param placeholders for collective JIT")
-      raw_params = jax.tree.map(
-          lambda a: jax.make_array_from_callback(
-              a.shape,
-              a.sharding,
-              lambda idx: np.zeros(tuple(s.stop - s.start for s in idx), dtype=a.dtype),
-          ),
-          unboxed_abstract_state.params,
-      )
-    # Memory-efficient path: create optimizer state directly from loaded params
-    # instead of JIT-compiling full model.init (which would double-allocate).
-    # ALL hosts participate in this collective JIT compilation.
+  elif raw_params:
     max_logging.log("Creating optimizer state from loaded params (memory-efficient path)")
     opt_state = jax.jit(
         tx.init,
@@ -646,16 +606,24 @@ def setup_train_loop(
     max_logging.log("Training mesh used for the workload")
     num_inference_devices = config.inference_devices_per_replica * config.inference_replicas
     num_training_devices = len(jax.devices()) - num_inference_devices
-    # Use contiguous device slices: first N devices for inference, rest for
-    # training.  This keeps expert collectives intra-host, avoiding the
-    # "unexpected peer / different launch id" TPU runtime error caused by
-    # non-deterministic cross-host XLA programs on interleaved meshes.
+    # Interleave devices across hosts so every host has both training and
+    # inference devices.  This is required for multi-host Orbax checkpoint
+    # loading (all hosts must have addressable shards in the mesh).
     all_devices = jax.devices()
-    inference_devices = all_devices[:num_inference_devices]
-    training_devices = all_devices[num_inference_devices:]
+    num_hosts = jax.process_count()
+    devices_per_host = len(all_devices) // num_hosts
+    infer_per_host = num_inference_devices // num_hosts
+    train_per_host = devices_per_host - infer_per_host
+    inference_devices = []
+    training_devices = []
+    for h in range(num_hosts):
+      host_start = h * devices_per_host
+      host_devices = all_devices[host_start : host_start + devices_per_host]
+      inference_devices.extend(host_devices[:infer_per_host])
+      training_devices.extend(host_devices[infer_per_host:])
     max_logging.log(
-        f"Device split: {len(inference_devices)} inference (devices 0-{num_inference_devices-1}), "
-        f"{len(training_devices)} training (devices {num_inference_devices}-{len(all_devices)-1})"
+        f"Device split: {len(inference_devices)} inference, {len(training_devices)} training "
+        f"({infer_per_host}+{train_per_host} per host)"
     )
     model = mt.from_config(config, devices=training_devices)
     mesh = model.mesh
@@ -789,18 +757,17 @@ def train_loop(config, config_inference, recorder, state=None):
   """The main GRPO training loop.
 
   This function orchestrates the entire training process. It initializes the
-  necessary components, starts a background thread for continuous data generation,
-  and then enters a loop to perform training steps.
+  necessary components and runs a sequential generate-then-train loop.
 
-  The loop consists of:
-  1. Fetching pre-generated prompt-completion pairs from a shared buffer.
-  2. Executing a training step with the fetched batch.
+  Each step consists of:
+  1. Generating completions using the inference engine (inference mesh).
+  2. Executing a training step with the generated batch (training mesh).
   3. Periodically resharding the updated policy parameters to the inference engine.
   4. Logging metrics and saving checkpoints.
-  5. Handling evaluation if configured.
 
-  The loop continues for the configured number of steps and manages the lifecycle
-  of the generation worker thread.
+  Generation and training are serialized (not concurrent) to avoid TPU ICI
+  "unexpected peer" errors caused by concurrent cross-host XLA collectives
+  from two different meshes.
 
   Args:
     config: The main training configuration object.
@@ -853,139 +820,69 @@ def train_loop(config, config_inference, recorder, state=None):
       config=config_inference,
       mesh=inference_mesh,
   )
-  data_buffer = []
-  data_buffer_lock = threading.Lock()
 
   start_step = get_first_step(state)  # this is the start_step for training
   prof = profiler.Profiler(config, offset_step=start_step)
-  inference_prof = profiler.Profiler(config_inference, offset_step=start_step)
   data_loader = DataLoader(config_inference, inference_mesh, data_iterator, recorder)
   metric_logger = MetricLogger(config=config, learning_rate_schedule=learning_rate_schedule)
 
   # Write train config params, num model params, and XLA flags to tensorboard
   metric_logger.write_setup_info_to_tensorboard(state.params["params"])
 
-  def generation_worker_fn(
-      worker_inference_engine,
-      worker_tokenizer_model,
-      worker_config_inference,
-      worker_config_train,
-      worker_data_buffer,
-      worker_data_buffer_lock,
-      worker_input_data_shardings,
-      engine_lock,
-      stop_event,
-      profiler_object,
-  ):
-    """The target function for the data generation worker thread.
-
-    This function runs in a loop, continuously calling `generate_completions`
-    to populate the shared data buffer. It stops when the `stop_event` is set
-    by the main thread.
-
-    Args:
-      worker_inference_engine: The offline inference engine.
-      worker_tokenizer_model: The tokenizer model.
-      worker_config_inference: The inference configuration.
-      worker_config_train: The training configuration.
-      worker_data_buffer: The shared list used as a data buffer.
-      worker_data_buffer_lock: A lock for thread-safe buffer access.
-      worker_input_data_shardings: Sharding specs for the generated data.
-      engine_lock: A lock for thread-safe inference engine access.
-      stop_event: A threading.Event to signal when the worker should stop.
-      profiling_event: a threading.Event to signal when to profile.
-    """
-    worker_step = 0
-    is_profiling = False
-    while not stop_event.is_set():
-      try:
-        if worker_step == profiler_object.start_initial_profile_step and not is_profiling:
-          profiler_object.activate()
-          is_profiling = True
-        elif worker_step == profiler_object.finished_initial_profile_step and is_profiling:
-          profiler_object.deactivate()
-          is_profiling = False
-        with jax.profiler.StepTraceAnnotation("inference", step_num=worker_step):
-          processed_batch = generate_completions(
-              data_loader,
-              worker_inference_engine,
-              worker_tokenizer_model,
-              worker_config_inference,
-              worker_config_train,
-              worker_input_data_shardings,
-              engine_lock,
-          )
-          jax.block_until_ready(processed_batch)
-
-        with worker_data_buffer_lock:
-          if not worker_data_buffer:
-            worker_data_buffer.append(processed_batch)
-          else:
-            worker_data_buffer[0] = jax.tree_util.tree_map(
-                lambda a, b: np.concatenate([a, b], axis=0),
-                worker_data_buffer[0],
-                processed_batch,
-            )
-        worker_step += 1
-      except (StopIteration, exceptions.StopTraining):
-        max_logging.log("Data iterator exhausted in generation worker. Stopping.")
-        break
-      except Exception as e:  # pylint: disable=broad-except
-        import traceback  # pylint: disable=import-outside-toplevel
-        max_logging.log(f"Error in generation worker: {e}")
-        max_logging.log(f"Traceback:\n{traceback.format_exc()}")
-        break
-    max_logging.log("Generation worker thread finished.")
-
-  stop_event = threading.Event()
+  # Use a no-op lock for generate_completions (which still takes engine_lock
+  # for API compatibility but there is no concurrent access in serial mode).
   inference_engine_lock = threading.Lock()
 
   required_batch_size = int(config.per_device_batch_size * config.num_generations * mesh.size)
-  generation_thread = threading.Thread(
-      target=generation_worker_fn,
-      args=(
-          inference_engine,  # Shared inference engine
-          tokenizer_model,
-          config_inference,
-          config,  # Main config for load_next_batch
-          data_buffer,
-          data_buffer_lock,
-          data_sharding,  # Sharding for the data put into the buffer
-          inference_engine_lock,
-          stop_event,
-          inference_prof,  # profiler object
-      ),
-      daemon=True,  # So it exits when the main thread exits
-  )
-  generation_thread.start()
+
+  # ---- Sequential generate-then-train loop ----
+  # Inference and training use separate device meshes on the same TPU pod.
+  # Running them concurrently causes TPU ICI "unexpected peer / different
+  # launch id" errors because cross-host XLA collectives from two meshes
+  # interfere.  Serialising generation and training avoids this.
 
   try:
     last_step_completion = datetime.datetime.now()
     for step in np.arange(start_step, config.steps):
       prof.maybe_activate_profiler(step, state)
 
-      with jax.profiler.StepTraceAnnotation("train", step_num=step):
-        while True:
-          with data_buffer_lock:
-            if not data_buffer and not generation_thread.is_alive():
-              max_logging.log("Generation worker is not alive and data buffer is empty. Exiting.")
-              break
-            if data_buffer:
-              example_batch = data_buffer[0]
-              if example_batch[config.train_data_columns].shape[0] >= required_batch_size:
-                example_batch = jax.tree_util.tree_map(lambda arr: arr[:required_batch_size], data_buffer[0])
-                data_buffer[0] = jax.tree_util.tree_map(lambda arr: arr[required_batch_size:], data_buffer[0])
-                break
-              else:
-                time.sleep(0.1)
-                continue
+      # --- Phase 1: Generate completions (inference mesh) ---
+      with jax.profiler.StepTraceAnnotation("generate", step_num=step):
+        data_buffer = None
+        while data_buffer is None or data_buffer[config.train_data_columns].shape[0] < required_batch_size:
+          try:
+            processed_batch = generate_completions(
+                data_loader,
+                inference_engine,
+                tokenizer_model,
+                config_inference,
+                config,
+                data_sharding,
+                inference_engine_lock,
+            )
+            jax.block_until_ready(processed_batch)
+            if data_buffer is None:
+              data_buffer = processed_batch
             else:
-              time.sleep(0.1)
-              continue
+              data_buffer = jax.tree_util.tree_map(
+                  lambda a, b: np.concatenate([a, b], axis=0),
+                  data_buffer,
+                  processed_batch,
+              )
+          except StopIteration:
+            max_logging.log("Data iterator exhausted during generation. Stopping training.")
+            raise exceptions.StopTraining("Data iterator exhausted.")
+
+        example_batch = jax.tree_util.tree_map(lambda arr: arr[:required_batch_size], data_buffer)
+
+      # --- Phase 2: Training step (training mesh) ---
+      with jax.profiler.StepTraceAnnotation("train", step_num=step):
         train_rng, rng = random.split(init_rng)
         example_batch = jax.device_put(example_batch, data_sharding)
         with jax.set_mesh(mesh), nn_partitioning.axis_rules(config.logical_axis_rules):
           state, metrics = p_train_step(state, example_batch, train_rng)
+
+      # --- Phase 3: Reshard params to inference engine (periodic) ---
       with jax.profiler.StepTraceAnnotation("transfer data", step_num=step):
         if step != 0 and step % config.inference_rollouts == 0:
           grpo_utils.pathways_reshard(
@@ -996,8 +893,6 @@ def train_loop(config, config_inference, recorder, state=None):
               mesh,
               {"params": inference_state_mesh_shardings.params["params"]},
           )
-          with data_buffer_lock:
-            data_buffer.clear()
 
       step_time_delta = datetime.datetime.now() - last_step_completion
       last_step_completion = datetime.datetime.now()
@@ -1049,12 +944,7 @@ def train_loop(config, config_inference, recorder, state=None):
     max_logging.log(f"Training stopped: {str(e)}")
   finally:
     metric_logger.flush_metrics_and_cleanup()
-    max_logging.log("Training loop finished or exited. Signaling generation worker to stop.")
-    stop_event.set()
-    # Wait for the generation thread to finish
-    generation_thread.join(timeout=60.0)  # Increased timeout
-    if generation_thread.is_alive():
-      max_logging.log("Warning: Generation worker did not stop in time after loop completion.")
+    max_logging.log("Training loop finished.")
 
   return state
 
