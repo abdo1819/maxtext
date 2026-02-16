@@ -76,7 +76,7 @@ learning_rate: 1.0e-6
 enable_dropout: false
 steps: 1000
 scan_layers: true
-optimizer_memory_host_offload: true
+optimizer_memory_host_offload: false
 
 add_bos: false
 add_eos: false
