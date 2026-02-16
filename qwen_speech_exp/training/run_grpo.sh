@@ -1,18 +1,14 @@
 #!/bin/bash
 # Launch GRPO training on TPU v4-32 (4 hosts × 4 chips = 16 chips).
 #
-# The GRPO trainer uses all 16 chips in a single multi-host JAX process:
-#   - 8 chips  → inference/rollout engine (generates completions)
-#   - 8 chips  → training (policy + reference model + gradients)
-#
-# Device allocation is CONTIGUOUS: first 8 devices (hosts 0-1) for
-# inference, last 8 devices (hosts 2-3) for training.  This avoids the
-# "unexpected peer in launch group" TPU runtime error caused by concurrent
-# collectives from interleaved meshes on the same host.
+# Training and inference share a SINGLE mesh with all 16 devices.
+# This avoids TPU ICI "unexpected peer in launch group" errors that
+# arise when two separate meshes exist on the same slice.
+# Execution is serialized: generate completions, then train, then repeat.
 #
 # Two config files are passed to the trainer via parse_custom_args:
-#   1st YAML + args → training config  (8 chips: fsdp=2 × expert=4)
-#   2nd YAML + args → inference config (8 chips: expert=8)
+#   1st YAML + args → training config  (16 chips: fsdp=4 × expert=4)
+#   2nd YAML + args → inference config  (same 16 chips, same ICI)
 #
 # Usage (from jumpbox):
 #   bash qwen_speech_exp/training/run_grpo.sh
@@ -37,15 +33,15 @@ export PYTHONHASHSEED=0 && \
 python3 -u -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
-    ici_fsdp_parallelism=2 \
+    ici_fsdp_parallelism=4 \
     grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
-    ici_expert_parallelism=8 \
-    ici_fsdp_parallelism=1 \
+    ici_expert_parallelism=4 \
+    ici_fsdp_parallelism=4 \
     per_device_batch_size=4 \
     grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \

@@ -578,9 +578,11 @@ def setup_train_loop(
 ]:
   """Initializes objects needed for the training loop.
 
-  This function sets up the training and inference meshes, models, optimizers,
-  learning rate schedules, and checkpoint managers. It also initializes the
-  training state.
+  Uses a SINGLE mesh with ALL devices for both training and inference.
+  This avoids TPU ICI "unexpected peer" errors that occur when two separate
+  meshes (with different device subsets) exist on the same TPU slice.
+  The OfflineEngine and training step share the same devices; execution
+  is serialized so they never run concurrently.
 
   Args:
     config: The main training configuration object.
@@ -594,63 +596,39 @@ def setup_train_loop(
       - state_mesh_shardings: Sharding specifications for the training state.
       - inference_state_mesh_shardings: Sharding specs for the inference state.
       - model: The training model instance.
-      - inference_model: The inference model instance.
-      - mesh: The device mesh for training.
-      - inference_mesh: The device mesh for inference.
+      - inference_model: The inference model instance (same as training model).
+      - mesh: The device mesh (shared by training and inference).
+      - inference_mesh: Same mesh object as `mesh`.
       - learning_rate_schedule: The learning rate schedule function.
       - data_iterator: The iterator for the input prompt dataset.
       - eval_data_iterator: The iterator for the evaluation dataset (or None).
       - state: The initialized training state.
   """
   with maybe_record_goodput(recorder, GoodputEvent.TPU_INIT):
-    max_logging.log("Training mesh used for the workload")
-    num_inference_devices = config.inference_devices_per_replica * config.inference_replicas
-    num_training_devices = len(jax.devices()) - num_inference_devices
-    # Interleave devices across hosts so every host has both training and
-    # inference devices.  This is required for multi-host Orbax checkpoint
-    # loading (all hosts must have addressable shards in the mesh).
+    # Use ALL devices in a single mesh for both training and inference.
     all_devices = jax.devices()
-    num_hosts = jax.process_count()
-    devices_per_host = len(all_devices) // num_hosts
-    infer_per_host = num_inference_devices // num_hosts
-    train_per_host = devices_per_host - infer_per_host
-    inference_devices = []
-    training_devices = []
-    for h in range(num_hosts):
-      host_start = h * devices_per_host
-      host_devices = all_devices[host_start : host_start + devices_per_host]
-      inference_devices.extend(host_devices[:infer_per_host])
-      training_devices.extend(host_devices[infer_per_host:])
-    max_logging.log(
-        f"Device split: {len(inference_devices)} inference, {len(training_devices)} training "
-        f"({infer_per_host}+{train_per_host} per host)"
-    )
-    model = mt.from_config(config, devices=training_devices)
+    num_devices = len(all_devices)
+    max_logging.log(f"Single mesh: {num_devices} devices for training + inference")
+    model = mt.from_config(config, devices=all_devices)
     mesh = model.mesh
-    max_logging.log("Inference mesh used for the workload")
-    # Override inference config batch sizes to match the inference device count
-    # (not the full device count used for training)
-    inference_batch = int(config_inference.per_device_batch_size * num_inference_devices)
+
+    # Override inference config batch sizes to match the full device count.
+    inference_batch = int(config_inference.per_device_batch_size * num_devices)
     object.__getattribute__(config_inference, "_flat_config")["micro_batch_size_to_train_on"] = inference_batch
     object.__getattribute__(config_inference, "_flat_config")["global_batch_size_to_train_on"] = inference_batch
     object.__getattribute__(config_inference, "_flat_config")["global_batch_size_to_load"] = inference_batch
-    inference_model = mt.from_config(config_inference, devices=inference_devices)
-    inference_mesh = inference_model.mesh
+
     init_rng, checkpoint_manager, learning_rate_schedule, tx = train_utils.create_training_tools(config, model, mesh)
 
   with maybe_record_goodput(recorder, GoodputEvent.TRAINING_PREPARATION):
     if config.use_audio:
-      data_iterator = grpo_audio_input_pipeline.create_audio_data_iterator(config_inference, inference_mesh)
+      data_iterator = grpo_audio_input_pipeline.create_audio_data_iterator(config_inference, mesh)
     else:
-      data_iterator = grpo_input_pipeline.create_data_iterator(config_inference, inference_mesh)
+      data_iterator = grpo_input_pipeline.create_data_iterator(config_inference, mesh)
     state, _, state_mesh_shardings, data_iterator = _setup_grpo_training_state(
         model, data_iterator, tx, config, init_rng, mesh, checkpoint_manager
     )
 
-  # create inference_state_mesh_shardings from inference_mesh
-  inference_state_mesh_shardings = maxtext_utils.get_abstract_state(
-      inference_model, tx, config_inference, init_rng, inference_mesh, is_training=False
-  )[2]
   if not config.using_pipeline_parallelism:
     # The vocab tensor(s) of shape [vocab, embed] (and transpose) are not sharded by stage
     sharding.assert_params_sufficiently_sharded(state.params, mesh, config.sharding_tolerance)
@@ -659,11 +637,11 @@ def setup_train_loop(
       init_rng,
       checkpoint_manager,
       state_mesh_shardings,
-      inference_state_mesh_shardings,
+      state_mesh_shardings,  # inference uses the same mesh/shardings
       model,
-      inference_model,
+      model,  # same model for both training and inference
       mesh,
-      inference_mesh,
+      mesh,  # single mesh shared by training and inference
       learning_rate_schedule,
       data_iterator,
       iter(()),  # GRPO does not support eval_dataset
@@ -700,11 +678,11 @@ def generate_completions(
     thread_example_batch = worker_data_loader.load_next_batch_pre_sharding()
     # Preserve ground_truth_text before tree_map (it may be a list of strings)
     ground_truth_text = thread_example_batch.pop("ground_truth_text", None)
-    # Trim data for inference processing
+    # Trim data for inference processing — all devices are used for inference
+    # in the single-mesh setup (no device split between training/inference).
     trim_size = int(
         (worker_config_inference.per_device_batch_size // worker_config_inference.num_generations)
-        * worker_config_train.inference_replicas
-        * worker_config_train.inference_devices_per_replica
+        * jax.device_count()
     )
     thread_example_batch_trimmed = jax.tree_util.tree_map(
         lambda arr: arr[:trim_size],
@@ -760,14 +738,14 @@ def train_loop(config, config_inference, recorder, state=None):
   necessary components and runs a sequential generate-then-train loop.
 
   Each step consists of:
-  1. Generating completions using the inference engine (inference mesh).
-  2. Executing a training step with the generated batch (training mesh).
-  3. Periodically resharding the updated policy parameters to the inference engine.
+  1. Generating completions using the inference engine.
+  2. Executing a training step with the generated batch.
+  3. Periodically updating the inference engine with trained parameters.
   4. Logging metrics and saving checkpoints.
 
-  Generation and training are serialized (not concurrent) to avoid TPU ICI
-  "unexpected peer" errors caused by concurrent cross-host XLA collectives
-  from two different meshes.
+  Training and inference share a single device mesh (all devices) to avoid
+  TPU ICI "unexpected peer" errors that arise from dual meshes on one slice.
+  Execution is serialized so training and inference never run concurrently.
 
   Args:
     config: The main training configuration object.
@@ -816,14 +794,15 @@ def train_loop(config, config_inference, recorder, state=None):
 
   data_sharding = sharding.get_input_data_sharding(config, mesh)
 
+  # OfflineEngine shares the training mesh — no separate inference mesh.
   inference_engine = offline_engine.OfflineEngine(
       config=config_inference,
-      mesh=inference_mesh,
+      mesh=mesh,
   )
 
   start_step = get_first_step(state)  # this is the start_step for training
   prof = profiler.Profiler(config, offset_step=start_step)
-  data_loader = DataLoader(config_inference, inference_mesh, data_iterator, recorder)
+  data_loader = DataLoader(config_inference, mesh, data_iterator, recorder)
   metric_logger = MetricLogger(config=config, learning_rate_schedule=learning_rate_schedule)
 
   # Write train config params, num model params, and XLA flags to tensorboard
@@ -836,10 +815,8 @@ def train_loop(config, config_inference, recorder, state=None):
   required_batch_size = int(config.per_device_batch_size * config.num_generations * mesh.size)
 
   # ---- Sequential generate-then-train loop ----
-  # Inference and training use separate device meshes on the same TPU pod.
-  # Running them concurrently causes TPU ICI "unexpected peer / different
-  # launch id" errors because cross-host XLA collectives from two meshes
-  # interfere.  Serialising generation and training avoids this.
+  # Training and inference share a single device mesh.  Execution is serialized
+  # so their XLA programs never overlap on the same devices.
 
   try:
     last_step_completion = datetime.datetime.now()
@@ -882,17 +859,12 @@ def train_loop(config, config_inference, recorder, state=None):
         with jax.set_mesh(mesh), nn_partitioning.axis_rules(config.logical_axis_rules):
           state, metrics = p_train_step(state, example_batch, train_rng)
 
-      # --- Phase 3: Reshard params to inference engine (periodic) ---
+      # --- Phase 3: Update inference engine params (periodic) ---
+      # Since training and inference share the same mesh, no resharding is
+      # needed — just hand the updated param pytree to the engine.
       with jax.profiler.StepTraceAnnotation("transfer data", step_num=step):
         if step != 0 and step % config.inference_rollouts == 0:
-          grpo_utils.pathways_reshard(
-              config_inference,
-              inference_engine,
-              {"params": state.params["params"]},
-              {"params": state_mesh_shardings.params["params"]},
-              mesh,
-              {"params": inference_state_mesh_shardings.params["params"]},
-          )
+          inference_engine.update_params({"params": state.params["params"]})
 
       step_time_delta = datetime.datetime.now() - last_step_completion
       last_step_completion = datetime.datetime.now()
@@ -980,11 +952,6 @@ def main(argv: Sequence[str]) -> None:
   if config.decode_sampling_strategy == "greedy" or config.decode_sampling_temperature == 0.0:
     raise ValueError(
         "Please set decode_sampling_strategy as 'weighted' and decode_sampling_temperature as a positive number"
-    )
-  if config.inference_devices_per_replica * config.inference_replicas >= jax.device_count():
-    raise ValueError(
-        f"Invalid value chosen for {config.inference_devices_per_replica=} and {config.inference_replicas=} "
-        f"with {jax.device_count()} devices"
     )
   config_inference = pyconfig.initialize(configs_argv[1])
 
