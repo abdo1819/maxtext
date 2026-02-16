@@ -508,21 +508,27 @@ def eval_step(model, config, state, data, dropout_rng):
 def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, checkpoint_manager):
   """Memory-efficient training state setup for GRPO.
 
-  The standard setup_training_state first JIT-compiles model.init to create
-  random params + optimizer state, then replaces params with checkpoint values.
-  This requires having both random params AND loaded params on device at the
-  same time, which OOMs on small device counts (e.g. 8 chips for a 30B model).
+  Loads checkpoint params directly and creates optimizer state from them,
+  avoiding the double-allocation OOM of the standard setup_training_state.
 
-  Instead, we:
-    1. Compute abstract state and shardings (no memory allocated)
-    2. Load params from checkpoint directly (no random params)
-    3. Create optimizer state from loaded params
-    4. Construct TrainState without double-allocating params
+  With contiguous device allocation, some hosts may have no local training
+  devices.  All hosts still participate in checkpoint loading and JIT
+  dispatch (required by JAX's SPMD model), but hosts without local devices
+  allocate no memory and perform no computation.
   """
   from flax.training import train_state
 
   unboxed_abstract_state, state_mesh_annotations, state_mesh_shardings = maxtext_utils.get_abstract_state(
       model, tx, config, rng, mesh, is_training=True
+  )
+
+  # Check if this host has any training devices (addressable shards).
+  # With contiguous allocation, some hosts may have no training devices.
+  local_training_devices = [d for d in mesh.devices.flat if d.process_index == jax.process_index()]
+  has_training_devices = len(local_training_devices) > 0
+  max_logging.log(
+      f"Process {jax.process_index()}: {len(local_training_devices)} local training devices "
+      f"(has_training_devices={has_training_devices})"
   )
 
   with nn_partitioning.axis_rules(config.logical_axis_rules):
@@ -615,24 +621,16 @@ def setup_train_loop(
     max_logging.log("Training mesh used for the workload")
     num_inference_devices = config.inference_devices_per_replica * config.inference_replicas
     num_training_devices = len(jax.devices()) - num_inference_devices
-    # Interleave devices across hosts so every host has both training and
-    # inference devices.  This avoids "no addressable shards" errors during
-    # multi-host checkpoint loading.
+    # Use contiguous device slices: first N devices for inference, rest for
+    # training.  This keeps expert collectives intra-host, avoiding the
+    # "unexpected peer / different launch id" TPU runtime error caused by
+    # non-deterministic cross-host XLA programs on interleaved meshes.
     all_devices = jax.devices()
-    num_hosts = jax.process_count()
-    devices_per_host = len(all_devices) // num_hosts
-    infer_per_host = num_inference_devices // num_hosts
-    train_per_host = devices_per_host - infer_per_host
-    inference_devices = []
-    training_devices = []
-    for h in range(num_hosts):
-      host_start = h * devices_per_host
-      host_devices = all_devices[host_start : host_start + devices_per_host]
-      inference_devices.extend(host_devices[:infer_per_host])
-      training_devices.extend(host_devices[infer_per_host:])
+    inference_devices = all_devices[:num_inference_devices]
+    training_devices = all_devices[num_inference_devices:]
     max_logging.log(
-        f"Device split: {len(inference_devices)} inference, {len(training_devices)} training "
-        f"({infer_per_host}+{train_per_host} per host)"
+        f"Device split: {len(inference_devices)} inference (devices 0-{num_inference_devices-1}), "
+        f"{len(training_devices)} training (devices {num_inference_devices}-{len(all_devices)-1})"
     )
     model = mt.from_config(config, devices=training_devices)
     mesh = model.mesh
