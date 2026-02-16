@@ -2,12 +2,16 @@
 # Launch GRPO training on TPU v4-32 (4 hosts × 4 chips = 16 chips).
 #
 # The GRPO trainer uses all 16 chips in a single multi-host JAX process:
-#   - 4 chips  → inference/rollout engine (generates completions)
-#   - 12 chips → training (policy + reference model + gradients)
+#   - 8 chips  → inference/rollout engine (generates completions)
+#   - 8 chips  → training (policy + reference model + gradients)
+#
+# NOTE: 8/8 split required because MoE activation_batch axis maps to
+# (data, fsdp, expert) and that product must divide 16 (expert groups).
+# 12 doesn't divide 16 but 8 does (expert=4 × fsdp=2 = 8).
 #
 # Two config files are passed to the trainer via parse_custom_args:
-#   1st YAML + args → training config  (12 chips: data=3 × expert=4)
-#   2nd YAML + args → inference config (4 chips:  expert=4)
+#   1st YAML + args → training config  (8 chips: fsdp=2 × expert=4)
+#   2nd YAML + args → inference config (8 chips: fsdp=2 × expert=4)
 #
 # Usage (from jumpbox):
 #   bash qwen_speech_exp/training/run_grpo.sh
@@ -31,14 +35,14 @@ export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACOR
 python3 -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
-    ici_fsdp_parallelism=1 \
-    ici_data_parallelism=3 \
+    ici_fsdp_parallelism=2 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
+    ici_fsdp_parallelism=2 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record" \
