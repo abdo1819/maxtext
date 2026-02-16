@@ -41,8 +41,8 @@ python3 -m MaxText.experimental.rl.grpo_trainer \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
-    ici_expert_parallelism=4 \
-    ici_fsdp_parallelism=2 \
+    ici_expert_parallelism=8 \
+    ici_fsdp_parallelism=1 \
     per_device_batch_size=4 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
