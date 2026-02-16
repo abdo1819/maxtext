@@ -75,7 +75,7 @@ per_device_batch_size: 1
 learning_rate: 1.0e-6
 enable_dropout: false
 steps: 1000
-scan_layers: true
+scan_layers: false
 optimizer_memory_host_offload: false
 
 add_bos: false
