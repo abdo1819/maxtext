@@ -32,10 +32,12 @@ git pull && \
 bash tools/setup/setup_gcsfuse.sh DATASET_GCS_BUCKET=arabic-asr-dataset MOUNT_PATH=/tmp/gcsfuse && \
 bash preflight.sh 2>/dev/null || true && \
 export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE' && \
-python3 -m MaxText.experimental.rl.grpo_trainer \
+export PYTHONHASHSEED=0 && \
+python3 -u -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
     ici_fsdp_parallelism=2 \
+    grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
@@ -44,6 +46,7 @@ python3 -m MaxText.experimental.rl.grpo_trainer \
     ici_expert_parallelism=8 \
     ici_fsdp_parallelism=1 \
     per_device_batch_size=4 \
+    grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record" \
