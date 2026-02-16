@@ -42,7 +42,8 @@ python3 -u -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
     ici_fsdp_parallelism=4 \
-    per_device_batch_size=4 \
+    per_device_batch_size=1 \
+    max_target_length=512 \
     grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
