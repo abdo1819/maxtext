@@ -6,8 +6,8 @@
 #   - 12 chips → training (policy + reference model + gradients)
 #
 # Two config files are passed to the trainer via parse_custom_args:
-#   1st YAML + args → training config  (12 chips: expert=4 × fsdp=3)
-#   2nd YAML + args → inference config (4 chips:  expert=4 × fsdp=1)
+#   1st YAML + args → training config  (12 chips: data=3 × expert=4)
+#   2nd YAML + args → inference config (4 chips:  expert=4)
 #
 # Usage (from jumpbox):
 #   bash qwen_speech_exp/training/run_grpo.sh
@@ -31,7 +31,8 @@ export LIBTPU_INIT_ARGS='--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACOR
 python3 -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
-    ici_fsdp_parallelism=3 \
+    ici_fsdp_parallelism=1 \
+    ici_data_parallelism=3 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
