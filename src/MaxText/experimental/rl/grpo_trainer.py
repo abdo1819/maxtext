@@ -552,11 +552,29 @@ def setup_train_loop(
   with maybe_record_goodput(recorder, GoodputEvent.TPU_INIT):
     max_logging.log("Training mesh used for the workload")
     num_inference_devices = config.inference_devices_per_replica * config.inference_replicas
-    training_devices = jax.devices()[num_inference_devices:]
+    num_training_devices = len(jax.devices()) - num_inference_devices
+    # Interleave devices across hosts so every host has both training and
+    # inference devices.  This avoids "no addressable shards" errors during
+    # multi-host checkpoint loading.
+    all_devices = jax.devices()
+    num_hosts = jax.process_count()
+    devices_per_host = len(all_devices) // num_hosts
+    infer_per_host = num_inference_devices // num_hosts
+    train_per_host = devices_per_host - infer_per_host
+    inference_devices = []
+    training_devices = []
+    for h in range(num_hosts):
+      host_start = h * devices_per_host
+      host_devices = all_devices[host_start : host_start + devices_per_host]
+      inference_devices.extend(host_devices[:infer_per_host])
+      training_devices.extend(host_devices[infer_per_host:])
+    max_logging.log(
+        f"Device split: {len(inference_devices)} inference, {len(training_devices)} training "
+        f"({infer_per_host}+{train_per_host} per host)"
+    )
     model = mt.from_config(config, devices=training_devices)
     mesh = model.mesh
     max_logging.log("Inference mesh used for the workload")
-    inference_devices = jax.devices()[:num_inference_devices]
     # Override inference config batch sizes to match the inference device count
     # (not the full device count used for training)
     inference_batch = int(config_inference.per_device_batch_size * num_inference_devices)
