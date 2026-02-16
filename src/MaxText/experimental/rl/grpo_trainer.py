@@ -511,10 +511,12 @@ def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, chec
   Loads checkpoint params directly and creates optimizer state from them,
   avoiding the double-allocation OOM of the standard setup_training_state.
 
-  With contiguous device allocation, some hosts may have no local training
-  devices.  All hosts still participate in checkpoint loading and JIT
-  dispatch (required by JAX's SPMD model), but hosts without local devices
-  allocate no memory and perform no computation.
+  With contiguous device allocation (inference on first N devices, training
+  on the rest), only hosts with training devices load from checkpoint.
+  Non-training hosts create zero-shard placeholder arrays so they can still
+  participate in collective JIT compilations (required by multi-host JAX)
+  without holding any actual parameter data or calling Orbax (which expects
+  every process to have addressable devices in the target sharding).
   """
   from flax.training import train_state
 
@@ -531,29 +533,52 @@ def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, chec
       f"(has_training_devices={has_training_devices})"
   )
 
-  with nn_partitioning.axis_rules(config.logical_axis_rules):
-    restored, raw_params = checkpointing.load_state_if_possible(
-        checkpoint_manager,
-        data_iterator,
-        config.load_parameters_path,
-        config.load_full_state_path,
-        config.checkpoint_storage_concurrent_gb,
-        unboxed_abstract_state,
-        config.enable_single_replica_ckpt_restoring,
-        config.dataset_type,
-        use_ocdbt=config.checkpoint_storage_use_ocdbt,
-        use_zarr3=config.checkpoint_storage_use_zarr3,
-        enable_orbax_v1=config.enable_orbax_v1,
-        checkpoint_conversion_fn=config.checkpoint_conversion_fn,
-        source_checkpoint_layout=config.source_checkpoint_layout,
-        expansion_factor_real_data=config.expansion_factor_real_data,
-    )
+  if has_training_devices:
+    with nn_partitioning.axis_rules(config.logical_axis_rules):
+      restored, raw_params = checkpointing.load_state_if_possible(
+          checkpoint_manager,
+          data_iterator,
+          config.load_parameters_path,
+          config.load_full_state_path,
+          config.checkpoint_storage_concurrent_gb,
+          unboxed_abstract_state,
+          config.enable_single_replica_ckpt_restoring,
+          config.dataset_type,
+          use_ocdbt=config.checkpoint_storage_use_ocdbt,
+          use_zarr3=config.checkpoint_storage_use_zarr3,
+          enable_orbax_v1=config.enable_orbax_v1,
+          checkpoint_conversion_fn=config.checkpoint_conversion_fn,
+          source_checkpoint_layout=config.source_checkpoint_layout,
+          expansion_factor_real_data=config.expansion_factor_real_data,
+      )
+  else:
+    max_logging.log("No local training devices — skipping checkpoint I/O")
+    restored, raw_params = None, None
+
+  # Barrier: training hosts may take tens of seconds to load from GCS.
+  # All hosts must reach the collective jax.jit(tx.init) at the same time.
+  jax.experimental.multihost_utils.sync_global_devices("grpo_checkpoint_loaded")
 
   if restored:
     state = restored["items"]
-  elif raw_params:
+  elif raw_params is not None or not has_training_devices:
+    if raw_params is None:
+      # Non-training hosts: build zero-shard jax.Array objects whose global
+      # shape and sharding match the training mesh.  The data callback is
+      # never invoked because this host has no addressable devices in the
+      # mesh, so no host memory is allocated for parameter data.
+      max_logging.log("Building zero-shard param placeholders for collective JIT")
+      raw_params = jax.tree.map(
+          lambda a: jax.make_array_from_callback(
+              a.shape,
+              a.sharding,
+              lambda idx: np.zeros(tuple(s.stop - s.start for s in idx), dtype=a.dtype),
+          ),
+          unboxed_abstract_state.params,
+      )
     # Memory-efficient path: create optimizer state directly from loaded params
-    # instead of JIT-compiling full model.init (which would double-allocate params).
+    # instead of JIT-compiling full model.init (which would double-allocate).
+    # ALL hosts participate in this collective JIT compilation.
     max_logging.log("Creating optimizer state from loaded params (memory-efficient path)")
     opt_state = jax.jit(
         tx.init,

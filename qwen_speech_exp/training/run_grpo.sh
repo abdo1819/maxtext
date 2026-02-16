@@ -5,13 +5,14 @@
 #   - 8 chips  → inference/rollout engine (generates completions)
 #   - 8 chips  → training (policy + reference model + gradients)
 #
-# NOTE: 8/8 split required because MoE activation_batch axis maps to
-# (data, fsdp, expert) and that product must divide 16 (expert groups).
-# 12 doesn't divide 16 but 8 does (expert=4 × fsdp=2 = 8).
+# Device allocation is CONTIGUOUS: first 8 devices (hosts 0-1) for
+# inference, last 8 devices (hosts 2-3) for training.  This avoids the
+# "unexpected peer in launch group" TPU runtime error caused by concurrent
+# collectives from interleaved meshes on the same host.
 #
 # Two config files are passed to the trainer via parse_custom_args:
 #   1st YAML + args → training config  (8 chips: fsdp=2 × expert=4)
-#   2nd YAML + args → inference config (8 chips: fsdp=2 × expert=4)
+#   2nd YAML + args → inference config (8 chips: expert=8)
 #
 # Usage (from jumpbox):
 #   bash qwen_speech_exp/training/run_grpo.sh
