@@ -43,6 +43,7 @@ python3 -m MaxText.experimental.rl.grpo_trainer \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
     ici_fsdp_parallelism=2 \
+    per_device_batch_size=4 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record" \
