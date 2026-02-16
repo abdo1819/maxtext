@@ -75,12 +75,16 @@ per_device_batch_size: 1
 learning_rate: 1.0e-6
 enable_dropout: false
 steps: 1000
-async_checkpointing: false
+scan_layers: true
+optimizer_memory_host_offload: true
 
 add_bos: false
 add_eos: false
 
 # ====== Checkpointing ======
+enable_checkpointing: true
+async_checkpointing: false
+checkpoint_period: 50
+base_output_directory: "gs://arabic-asr-dataset/grpo_training"
 # Override via CLI:
 # load_parameters_path: "gs://path/to/converted/checkpoint"
-# checkpoint_dir: "gs://path/to/grpo/checkpoints"
