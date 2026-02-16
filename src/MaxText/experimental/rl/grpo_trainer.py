@@ -505,6 +505,68 @@ def eval_step(model, config, state, data, dropout_rng):
   return metrics
 
 
+def _setup_grpo_training_state(model, data_iterator, tx, config, rng, mesh, checkpoint_manager):
+  """Memory-efficient training state setup for GRPO.
+
+  The standard setup_training_state first JIT-compiles model.init to create
+  random params + optimizer state, then replaces params with checkpoint values.
+  This requires having both random params AND loaded params on device at the
+  same time, which OOMs on small device counts (e.g. 8 chips for a 30B model).
+
+  Instead, we:
+    1. Compute abstract state and shardings (no memory allocated)
+    2. Load params from checkpoint directly (no random params)
+    3. Create optimizer state from loaded params
+    4. Construct TrainState without double-allocating params
+  """
+  from flax.training import train_state
+
+  unboxed_abstract_state, state_mesh_annotations, state_mesh_shardings = maxtext_utils.get_abstract_state(
+      model, tx, config, rng, mesh, is_training=True
+  )
+
+  with nn_partitioning.axis_rules(config.logical_axis_rules):
+    restored, raw_params = checkpointing.load_state_if_possible(
+        checkpoint_manager,
+        data_iterator,
+        config.load_parameters_path,
+        config.load_full_state_path,
+        config.checkpoint_storage_concurrent_gb,
+        unboxed_abstract_state,
+        config.enable_single_replica_ckpt_restoring,
+        config.dataset_type,
+        use_ocdbt=config.checkpoint_storage_use_ocdbt,
+        use_zarr3=config.checkpoint_storage_use_zarr3,
+        enable_orbax_v1=config.enable_orbax_v1,
+        checkpoint_conversion_fn=config.checkpoint_conversion_fn,
+        source_checkpoint_layout=config.source_checkpoint_layout,
+        expansion_factor_real_data=config.expansion_factor_real_data,
+    )
+
+  if restored:
+    state = restored["items"]
+  elif raw_params:
+    # Memory-efficient path: create optimizer state directly from loaded params
+    # instead of JIT-compiling full model.init (which would double-allocate params).
+    max_logging.log("Creating optimizer state from loaded params (memory-efficient path)")
+    opt_state = jax.jit(
+        tx.init,
+        out_shardings=state_mesh_shardings.opt_state,
+    )(raw_params)
+    state = train_state.TrainState(
+        step=0,
+        apply_fn=model.apply,
+        params=raw_params,
+        tx=tx,
+        opt_state=opt_state,
+    )
+  else:
+    raise ValueError("GRPO requires a pretrained checkpoint. Set load_parameters_path or load_full_state_path.")
+
+  state = max_utils.unbox_logicallypartioned(state)
+  return state, state_mesh_annotations, state_mesh_shardings, data_iterator
+
+
 def setup_train_loop(
     config,
     config_inference,
@@ -590,7 +652,7 @@ def setup_train_loop(
       data_iterator = grpo_audio_input_pipeline.create_audio_data_iterator(config_inference, inference_mesh)
     else:
       data_iterator = grpo_input_pipeline.create_data_iterator(config_inference, inference_mesh)
-    state, _, state_mesh_shardings, data_iterator = maxtext_utils.setup_training_state(
+    state, _, state_mesh_shardings, data_iterator = _setup_grpo_training_state(
         model, data_iterator, tx, config, init_rng, mesh, checkpoint_manager
     )
 
