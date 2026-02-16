@@ -36,10 +36,12 @@ entire training loop, including checkpointing and metric logging.
 import pathwaysutils
 
 import datetime
+import queue
 import time
 import os
 import functools
 import threading
+import types
 
 from typing import Sequence, Callable, Iterator
 
@@ -94,6 +96,118 @@ from maxtext.utils import maxtext_utils
 from maxtext.utils import train_utils
 
 # pylint: disable=too-many-positional-arguments
+
+
+# -----------------------------------------------------------------------------
+# Synchronous detokenization for multi-host determinism
+# -----------------------------------------------------------------------------
+# The OfflineEngine's _run_continuous_batching() starts a background
+# detokenization thread that modifies empty_decode_slots asynchronously.
+# In multi-host setups, threads on different hosts run at different speeds,
+# causing one host to start a prefill while another is still decoding.
+# The mismatched XLA programs trigger "unexpected peer in launch group" errors.
+#
+# Fix: Replace background detokenization with synchronous (inline) processing.
+# After each decode() or prefill, drain the detokenization queue immediately.
+# This ensures all hosts see the same empty_decode_slots state and execute
+# the same XLA programs in lockstep.
+
+
+def _drain_detokenization_queue(worker):
+  """Process all pending detokenization tasks from the worker's queue.
+
+  Replicates the logic of InferenceWorker.background_detokenization() but
+  runs inline (synchronously) so all hosts process in lockstep.
+  """
+  while not worker.detokenization_queue.empty():
+    try:
+      task = worker.detokenization_queue.get_nowait()
+    except queue.Empty:
+      break
+
+    newly_empty = []
+
+    if task.task_type == "prefill":
+      for i, result_tokens in enumerate(task.result_tokens):
+        prompt_id = task.prompt_ids[i]
+        slot = task.slots[i]
+        prompt_logp = task.prompt_logp[i]
+        true_length = worker.true_lengths[prompt_id]
+
+        first_token = np.array(result_tokens.data[:, 0])
+        log_prob = np.array(result_tokens.log_prob)
+        prompt_logp_np = np.array(prompt_logp)[:, :true_length]
+
+        should_terminate = worker.emit_token(prompt_id, int(first_token), log_prob, prompt_logp=prompt_logp_np)
+        if should_terminate:
+          newly_empty.append(slot)
+
+    elif task.task_type == "decode":
+      active_slots = []
+      for slot, id_ in worker.slot_to_id.items():
+        if id_ is not None and id_ not in worker.completed_sequences:
+          active_slots.append((slot, id_))
+
+      if not active_slots:
+        continue
+
+      result_tokens_step = np.array(task.tokens_buffer)
+      log_prob_step = np.array(task.logprob_buffer)
+
+      for slot, id_ in active_slots:
+        log_prob_at_slot = log_prob_step[slot]
+        result_tokens_at_slot = result_tokens_step[slot]
+        should_terminate = worker.emit_token(id_, int(result_tokens_at_slot), log_prob_at_slot)
+        if should_terminate:
+          newly_empty.append(slot)
+
+    for slot in newly_empty:
+      worker.slot_to_id[slot] = None
+      worker.empty_decode_slots.add(slot)
+
+
+def _synchronous_run_continuous_batching(self, data):
+  """Synchronous replacement for InferenceWorker._run_continuous_batching.
+
+  Processes detokenization inline (no background thread) to ensure all hosts
+  execute the same sequence of prefill/decode XLA programs in lockstep.
+  This prevents 'unexpected peer in launch group' TPU errors.
+  """
+  for row in data:
+    # 1. Wait for an empty slot (decode until one frees up)
+    while not self.empty_decode_slots:
+      self.decode()
+      _drain_detokenization_queue(self)
+
+    # 2. Get an available slot
+    slot = self.empty_decode_slots.pop()
+
+    # 3. Prefill and insert kv cache
+    self.prefill_helper.process(
+        model_params=self.params,
+        decode_state=self.decode_state,
+        decode_slot=slot,
+        input_id=row.id,
+        input_tokens_padded=row.tokens,
+        input_true_length=row.true_length,
+        prefill_done=self.prefill_done,
+        audio_values=row.audio_features,
+        audio_masks=row.audio_mask,
+    )
+    # Process any prefill detokenization tasks immediately
+    _drain_detokenization_queue(self)
+
+  # 4. Flush any pending inputs in batch prefill mode
+  self.prefill_helper.finalize(self.params, self.decode_state, self.prefill_done)
+  _drain_detokenization_queue(self)
+
+  # 5. Continue decoding until all sequences are complete
+  while not all(value is None for value in self.slot_to_id.values()):
+    self.decode()
+    _drain_detokenization_queue(self)
+
+  max_logging.log("Synchronous continuous batching completed")
+
 
 # -----------------------------------------------------------------------------
 # GRPO
@@ -799,6 +913,14 @@ def train_loop(config, config_inference, recorder, state=None):
       config=config_inference,
       mesh=mesh,
   )
+
+  # Monkey-patch: replace background detokenization with synchronous processing.
+  # This ensures all hosts execute the same prefill/decode XLA programs in lockstep,
+  # preventing "unexpected peer in launch group" TPU errors in multi-host setups.
+  inference_engine.worker._run_continuous_batching = types.MethodType(
+      _synchronous_run_continuous_batching, inference_engine.worker
+  )
+  max_logging.log("Patched InferenceWorker with synchronous detokenization for multi-host determinism")
 
   start_step = get_first_step(state)  # this is the start_step for training
   prof = profiler.Profiler(config, offset_step=start_step)
