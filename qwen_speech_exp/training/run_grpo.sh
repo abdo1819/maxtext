@@ -43,7 +43,8 @@ python3 -u -m MaxText.experimental.rl.grpo_trainer \
     ici_expert_parallelism=4 \
     ici_fsdp_parallelism=4 \
     per_device_batch_size=1 \
-    max_target_length=512 \
+    max_prefill_predict_length=128 \
+    max_target_length=384 \
     grain_worker_count=0 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
