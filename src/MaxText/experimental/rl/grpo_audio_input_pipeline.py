@@ -229,13 +229,21 @@ def create_audio_data_iterator(config, mesh):
       mesh,
   )
 
+  # In multi-host GRPO, all processes participate in the generation loop
+  # (JAX collectives), so all need a valid data iterator. Non-inference
+  # processes load the same shard as the first data-loading process.
+  if jax.process_index() in process_indices:
+    dataloading_host_index = process_indices.index(jax.process_index())
+  else:
+    dataloading_host_index = 0
+
   train_ds = get_datasets(
       config.grain_train_files,
       config.grain_file_type,
       shuffle=config.enable_data_shuffling,
       shuffle_seed=config.data_shuffle_seed,
       num_epoch=config.num_epoch,
-      dataloading_host_index=process_indices.index(jax.process_index()),
+      dataloading_host_index=dataloading_host_index,
       dataloading_host_count=len(process_indices),
       grain_worker_count=config.grain_worker_count,
       grain_num_threads=config.grain_num_threads,
