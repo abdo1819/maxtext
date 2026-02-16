@@ -35,11 +35,11 @@ python3 -m MaxText.experimental.rl.grpo_trainer \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
     base_output_directory=gs://arabic-asr-dataset/grpo_training \
-    grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/ \
+    grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record \
     src/maxtext/configs/grpo_audio_qwen3_omni.yml \
     ici_expert_parallelism=4 \
     tokenizer_path=${TOKENIZER_PATH} \
     load_parameters_path=${CHECKPOINT_PATH}/0/items \
-    grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/" \
+    grain_train_files=/tmp/gcsfuse/grain_data_arrayrecord/train/*.array_record" \
     --USE_EXISTING_FOLDER=true \
     --RUN_NAME=maxtext
