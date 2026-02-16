@@ -1007,8 +1007,9 @@ class RoutedMoE(nnx.Module):
 
     # Guard against batch dimension too small for fsdp sharding (e.g. during
     # inference prefill where batch_size=1).  Compute the effective sharding
-    # factor implied by the chosen batch_logical_axis and fall back to
-    # replicated (None) when the batch cannot be evenly divided.
+    # factor implied by the chosen batch_logical_axis and pad the batch
+    # dimension so it is evenly divisible.  Padding (rather than replicating)
+    # keeps per-device memory usage low.
     batch_pspec = self._logical_to_mesh_axes((batch_logical_axis,))
     batch_shard_factor = 1
     if batch_pspec is not None and batch_pspec[0] is not None:
@@ -1016,8 +1017,13 @@ class RoutedMoE(nnx.Module):
       axes = ax if isinstance(ax, tuple) else (ax,)
       for a in axes:
         batch_shard_factor *= self.mesh.shape[a]
+    _moe_batch_pad = 0
     if inputs.shape[0] % batch_shard_factor != 0:
-      batch_logical_axis = None
+      _moe_batch_pad = batch_shard_factor - (inputs.shape[0] % batch_shard_factor)
+      inputs = jnp.pad(inputs, ((0, _moe_batch_pad), (0, 0), (0, 0)))
+      gate_logits = jnp.pad(gate_logits, ((0, _moe_batch_pad), (0, 0), (0, 0)))
+      if pre_bias_logits is not None:
+        pre_bias_logits = jnp.pad(pre_bias_logits, ((0, _moe_batch_pad), (0, 0), (0, 0)))
 
     if self.get_tensor_transpose_parallelism_size() > 1:
       input_partition_pspec = self._logical_to_mesh_axes(
@@ -1397,9 +1403,14 @@ class RoutedMoE(nnx.Module):
     gate_logits = self._maybe_shard_with_logical(gate_logits, gate_logits_axes)
     pre_bias_logits = self._maybe_shard_with_logical(pre_bias_logits, pre_bias_logits_axes)
 
-    return wrapper(
+    result = wrapper(
         inputs, gate_logits, pre_bias_logits, w0_kernel, w1_kernel, wo_kernel, w0_bias, w1_bias, wo_bias, self.rngs
     )
+    if _moe_batch_pad > 0:
+      # Strip padding added for batch-dimension divisibility.
+      output, lb_loss, bias_updates = result
+      result = (output[:-_moe_batch_pad], lb_loss, bias_updates)
+    return result
 
   def reshape_and_update_weights(self, weights, indices):
     """reshape and update weights."""
