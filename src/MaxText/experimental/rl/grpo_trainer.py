@@ -813,7 +813,10 @@ def train_loop(config, config_inference, recorder, state=None):
   )
 
   if "reference_params" not in state.params:
-    reference_params = jax.tree.map(jnp.copy, state.params["params"])
+    # Re-use the existing param buffers as reference params instead of jnp.copy.
+    # JAX arrays are immutable — training updates create new arrays, so the
+    # originals remain valid as the frozen reference.  This saves ~7.5 GB/chip.
+    reference_params = state.params["params"]
     state = _merge_grpo_state(state, reference_params)
   state_mesh_shardings = _merge_grpo_state(state_mesh_shardings, state_mesh_shardings.params["params"])
 
