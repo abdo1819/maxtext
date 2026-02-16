@@ -794,10 +794,11 @@ def generate_completions(
     ground_truth_text = thread_example_batch.pop("ground_truth_text", None)
     # Trim data for inference processing — all devices are used for inference
     # in the single-mesh setup (no device split between training/inference).
-    trim_size = int(
-        (worker_config_inference.per_device_batch_size // worker_config_inference.num_generations)
-        * jax.device_count()
-    )
+    # Compute total decode capacity first, then divide by num_generations to
+    # get the number of unique prompts.  This avoids integer-division-to-zero
+    # when per_device_batch_size < num_generations.
+    total_decode_slots = worker_config_inference.per_device_batch_size * jax.device_count()
+    trim_size = max(1, int(total_decode_slots // worker_config_inference.num_generations))
     thread_example_batch_trimmed = jax.tree_util.tree_map(
         lambda arr: arr[:trim_size],
         thread_example_batch,
