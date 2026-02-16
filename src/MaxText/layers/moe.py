@@ -1005,6 +1005,20 @@ class RoutedMoE(nnx.Module):
     else:
       batch_logical_axis = "activation_batch_no_exp"
 
+    # Guard against batch dimension too small for fsdp sharding (e.g. during
+    # inference prefill where batch_size=1).  Compute the effective sharding
+    # factor implied by the chosen batch_logical_axis and fall back to
+    # replicated (None) when the batch cannot be evenly divided.
+    batch_pspec = self._logical_to_mesh_axes((batch_logical_axis,))
+    batch_shard_factor = 1
+    if batch_pspec is not None and batch_pspec[0] is not None:
+      ax = batch_pspec[0]
+      axes = ax if isinstance(ax, tuple) else (ax,)
+      for a in axes:
+        batch_shard_factor *= self.mesh.shape[a]
+    if inputs.shape[0] % batch_shard_factor != 0:
+      batch_logical_axis = None
+
     if self.get_tensor_transpose_parallelism_size() > 1:
       input_partition_pspec = self._logical_to_mesh_axes(
           (batch_logical_axis, "activation_norm_length", "activation_embed")
